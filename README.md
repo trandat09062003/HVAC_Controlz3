@@ -2,6 +2,8 @@
 
 ### Đồ án nghiên cứu phát triển hệ thống điều khiển vi khí hậu tòa nhà dựa trên kiến trúc phân tán Edge-to-Central (ESP32-S3 và Raspberry Pi)
 
+![Views](https://hits.seeyoufarm.com/api/count/incr/badge.svg?url=https%3A%2F%2Fgithub.com%2Ftrandat09062003%2FSmart_HVAC&count_bg=%2379C0FF&title_bg=%23555555&icon=&icon_color=%23E5E5E5&title=views&edge_flat=false)
+
 Dự án xây dựng hệ thống điều khiển thông gió và điều hòa không khí (HVAC) quy mô phòng học/văn phòng. Hệ thống hoạt động theo mô hình **Hierarchical Control (Điều khiển phân tầng)**:
 * **Edge Node (ESP32-S3):** Thu thập dữ liệu từ cảm biến chất lượng không khí **Sensirion SCD30** (đo CO2, Nhiệt độ, Độ ẩm), điều khiển quạt thông gió qua **Module Relay**, chỉ thị trạng thái bằng **LED** và duy trì vòng điều khiển cục bộ an toàn (**Fail-safe**) dựa trên các ngưỡng dự phòng khi mất kết nối.
 * **Central Server (Raspberry Pi):** Đóng vai trò là **AI Zone Manager** chạy trên nền tảng Docker, lưu trữ dữ liệu chuỗi thời gian vào **TimescaleDB**, chạy mô hình dự báo **XGB-DQN** kết hợp thông tin thời tiết ngoài trời để tự động hiệu chỉnh tham số Setpoint cho ESP32 nhằm tối ưu năng lượng.
