@@ -41,6 +41,8 @@
 #define RELAY_ACTIVE_LOW false // Sửa lỗi ngược: Đặt thành false (Kích HIGH để bật quạt, LOW để tắt)hái nhiệt độ
 #define USE_ONBOARD_RGB  true  // Đặt thành 'true' nếu dùng LED RGB WS2812B tích hợp trên board ESP32-S3
 #define PIN_RGB_WS2812   48    // Chân điều khiển LED RGB WS2812B (thường là 48 hoặc 38)
+#define PIN_PMS_RX       18    // Chân RX1 nối TX của PMS7003
+#define PIN_PMS_TX       17    // Chân TX1 nối RX của PMS7003 (tùy chọn)
 
 // Các chân GPIO nếu bạn sử dụng LED rời gắn ngoài (khi USE_ONBOARD_RGB = false)
 #define PIN_LED_COOLING  10    // LED Xanh báo làm mát (Cooling)
@@ -54,6 +56,9 @@
 SCD30 airSensor;
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+
+// Các biến thu thập và điều khiển hệ thống
+float latestPM25 = 12.5; // Giá trị bụi mịn PM2.5 (ug/m3) đo từ PMS7003
 
 // Các biến điều khiển hệ thống (Có thể thay đổi động từ xa qua MQTT)
 float TEMP_SETPOINT        = 25.0; // Nhiệt độ cài đặt mục tiêu (°C)
@@ -351,6 +356,47 @@ void maintainMQTTConnection() {
   }
 }
 
+/**
+ * Hàm đọc và giải mã không chặn dữ liệu từ cảm biến bụi mịn PMS7003 qua Serial1
+ */
+bool readPMS7003(float &pm25_val) {
+  static uint8_t buffer[32];
+  static uint8_t index = 0;
+  
+  while (Serial1.available() > 0) {
+    uint8_t ch = Serial1.read();
+    
+    // Tìm byte bắt đầu 0x42
+    if (index == 0 && ch != 0x42) continue;
+    // Tìm byte bắt đầu 0x4d
+    if (index == 1 && ch != 0x4d) {
+      index = 0;
+      continue;
+    }
+    
+    buffer[index++] = ch;
+    
+    if (index == 32) {
+      index = 0; // Reset index cho lần đọc tiếp theo
+      
+      // Tính toán Checksum
+      uint16_t sum = 0;
+      for (int i = 0; i < 30; i++) {
+        sum += buffer[i];
+      }
+      uint16_t checksum = (buffer[30] << 8) | buffer[31];
+      
+      if (sum == checksum) {
+        // PM2.5 trong môi trường khí quyển (Atmos) nằm ở bytes 12 và 13
+        uint16_t pm25_atm = (buffer[12] << 8) | buffer[13];
+        pm25_val = (float)pm25_atm;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // =========================================================================
 // SETUP & LOOP
 // =========================================================================
@@ -404,6 +450,10 @@ void setup() {
   // 4. Khởi tạo mạng WiFi
   setupWiFi();
 
+  // 4.5. Khởi tạo Serial1 cho cảm biến bụi mịn PMS7003
+  Serial.printf("[PMS7003] Khoi tao Serial1: RX -> GPIO%d, TX -> GPIO%d\n", PIN_PMS_RX, PIN_PMS_TX);
+  Serial1.begin(9600, SERIAL_8N1, PIN_PMS_RX, PIN_PMS_TX);
+
   // 5. Cấu hình MQTT Broker
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
@@ -413,6 +463,9 @@ void setup() {
 }
 
 void loop() {
+  // Đọc dữ liệu từ cảm biến bụi mịn PMS7003 liên tục
+  readPMS7003(latestPM25);
+
   // 1. Tự động duy trì và kết nối lại WiFi nếu mất mạng
   maintainWiFiConnection();
 
@@ -506,8 +559,8 @@ void loop() {
         char jsonPayload[256];
         // Đóng gói JSON thủ công siêu nhẹ, tương thích 100% với Cloud
         snprintf(jsonPayload, sizeof(jsonPayload),
-                 "{\"device_id\":\"%s\",\"temperature\":%.2f,\"outdoor_temperature\":%.2f,\"humidity\":%.2f,\"co2\":%d,\"dust\":12.5}",
-                 MQTT_DEVICE_ID, temperature, (temperature + 3.2), humidity, (int)co2);
+                 "{\"device_id\":\"%s\",\"temperature\":%.2f,\"outdoor_temperature\":%.2f,\"humidity\":%.2f,\"co2\":%d,\"dust\":%.2f}",
+                 MQTT_DEVICE_ID, temperature, (temperature + 3.2), humidity, (int)co2, latestPM25);
 
         Serial.printf("[MQTT Publish] Gui tin len topic [%s]: %s\n", MQTT_PUB_TOPIC, jsonPayload);
         

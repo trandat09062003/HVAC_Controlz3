@@ -28,6 +28,8 @@ Sơ đồ đấu nối chi tiết từ Module vi điều khiển **ESP32-S3-WROO
 | **GPIO43 (TXD0)** | Output | Chân TX của cổng UART nạp | UART Debug | Đưa ra Pin Header 4-pin dự phòng. |
 | **GPIO44 (RXD0)** | Input | Chân RX của cổng UART nạp | UART Debug | Đưa ra Pin Header 4-pin dự phòng. |
 | **GPIO48** | Output | Chân DIN của LED WS2812B | LED RGB Onboard đa chỉ thị | Cần nối tiếp điện trở $330\,\Omega$ trước chân DIN. |
+| **GPIO18 (RXD1)** | Input | Chân TXD của PMS7003 | Nhận dữ liệu cảm biến bụi | Kết nối nối tiếp để đọc luồng dữ liệu PMS. |
+| **GPIO17 (TXD1)** | Output | Chân RXD của PMS7003 | Gửi lệnh cấu hình cảm biến | Nối sang RXD của PMS7003 (tùy chọn). |
 
 ### B. Cấu hình chân Strapping cực kỳ quan trọng
 ESP32-S3 sử dụng một số chân để xác định chế độ boot khi khởi động (Strapping Pins). Đảm bảo thiết kế phần cứng tuân thủ:
@@ -62,6 +64,7 @@ Các linh kiện dưới đây được chuẩn hóa theo kích thước **0603*
 | 18 | R_G1 | 330Ω | 0603 | `C17630` | Điện trở hạn dòng chân kích Gate / LED đơn |
 | 19 | C_IN | 10uF 50V (MLCC) | 0805 | `C284930` | Tụ lọc ngõ vào 24V cho Buck |
 | 20 | C_OUT| 22uF 10V (MLCC) | 0805 | `C34320` | Tụ lọc ngõ ra 5V / 3.3V |
+| 21 | U5 | PMS7003 | Module | - | Cảm biến bụi mịn PM1.0, PM2.5, PM10 |
 
 ---
 
