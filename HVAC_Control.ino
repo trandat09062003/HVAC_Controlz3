@@ -43,6 +43,12 @@
 #define PIN_RGB_WS2812   48    // Chân điều khiển LED RGB WS2812B (thường là 48 hoặc 38)
 #define PIN_PMS_RX       16    // Chân RX1 nối với PMS_TX (GPIO16)
 #define PIN_PMS_TX       17    // Chân TX1 nối với PMS_RX (GPIO17)
+#define PIN_SERVO        15    // Chân tín hiệu điều khiển van thông gió Servo (GPIO15)
+
+// Cấu hình LEDC cho Servo
+#define SERVO_LEDC_CH    0     // Kênh LEDC cho Servo
+#define SERVO_LEDC_HZ    50    // Tần số PWM cho Servo (50Hz)
+#define SERVO_LEDC_RES   12    // Độ phân giải 12-bit
 
 // Các chân GPIO nếu bạn sử dụng LED rời gắn ngoài (khi USE_ONBOARD_RGB = false)
 #define PIN_LED_COOLING  10    // LED Xanh báo làm mát (Cooling)
@@ -63,6 +69,7 @@ float latestPM25 = 12.5; // Giá trị bụi mịn PM2.5 (ug/m3) đo từ PMS700
 // Các biến điều khiển hệ thống (Có thể thay đổi động từ xa qua MQTT)
 float TEMP_SETPOINT        = 25.0; // Nhiệt độ cài đặt mục tiêu (°C)
 bool  systemPowerState     = true; // Trạng thái hoạt động hệ thống (true: ON, false: OFF - Chế độ chờ Standby)
+float systemDamperRatio    = 0.3;  // Tỷ lệ mở van thông gió từ 0.2 đến 1.0 (20% - 100%)
 
 // Các ngưỡng cố định bảo vệ tiện nghi không khí
 const float TEMP_HYSTERESIS   = 0.5;   // Khoảng trễ nhiệt độ (°C) tránh đóng ngắt liên tục
@@ -70,6 +77,8 @@ float CO2_MAX                 = 800.0;  // Ngưỡng CO2 chuẩn báo động (p
 const float CO2_HYSTERESIS    = 100.0; // Khoảng trễ CO2 (Quạt tắt khi < CO2_MAX - 100)
 float HUMIDITY_MAX            = 60.0;  // Ngưỡng độ ẩm tối đa (%) theo chuẩn (có thể thay đổi động)
 const float HUMIDITY_HYSTERESIS = 5.0; // Khoảng trễ độ ẩm (Quạt tắt khi < HUMIDITY_MAX - 5)
+float PM25_MAX                = 35.0;  // Ngưỡng bụi mịn PM2.5 chuẩn báo động (ug/m3) để bật quạt (có thể thay đổi động)
+const float PM25_HYSTERESIS   = 5.0;   // Khoảng trễ PM2.5 (Quạt tắt khi < PM25_MAX - 5)
 
 // Quản lý trạng thái hiện tại
 bool currentFanState   = false; // Trạng thái Quạt tản (false: OFF, true: ON)
@@ -124,6 +133,20 @@ void controlTemperatureLEDs(bool cooling, bool heating) {
     digitalWrite(PIN_LED_COOLING, cooling ? HIGH : LOW);
     digitalWrite(PIN_LED_HEATING, heating ? HIGH : LOW);
   }
+}
+
+/**
+ * Hàm điều khiển góc mở van thông gió Servo qua PWM
+ * ratio: tỉ lệ mở van từ 0.0 (đóng hoàn toàn) đến 1.0 (mở hoàn toàn 90 độ)
+ */
+void controlVentilationDamper(float ratio) {
+  ratio = constrain(ratio, 0.0, 1.0);
+  int angle = (int)(ratio * 90.0); // Quy đổi góc từ 0 đến 90 độ
+  
+  // Tính toán chu kỳ xung cho Servo (50Hz -> 20ms)
+  // Duty cycle 12-bit (0-4095): 0.5ms (0 độ) = 102, 2.5ms (180 độ) = 512
+  int duty = map(angle, 0, 180, 102, 512);
+  ledcWrite(SERVO_LEDC_CH, duty);
 }
 
 // =========================================================================
@@ -303,6 +326,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       }
     }
   }
+
+  // 7. Phân tích tỷ lệ mở van thông gió (damper)
+  char* damperPtr = strstr(message, "\"damper\"");
+  if (damperPtr != NULL) {
+    char* valPtr = strchr(damperPtr, ':');
+    if (valPtr != NULL) {
+      valPtr++;
+      float newDamper = atof(valPtr);
+      if (newDamper >= 0.0 && newDamper <= 1.0) {
+        systemDamperRatio = newDamper;
+        Serial.printf("  --> [MQTT Command] Cap nhat do mo van: %.2f\n", systemDamperRatio);
+      }
+    }
+  }
 }
 
 /**
@@ -454,6 +491,12 @@ void setup() {
   Serial.printf("[PMS7003] Khoi tao Serial1: RX -> GPIO%d, TX -> GPIO%d\n", PIN_PMS_RX, PIN_PMS_TX);
   Serial1.begin(9600, SERIAL_8N1, PIN_PMS_RX, PIN_PMS_TX);
 
+  // 4.6. Khởi tạo PWM điều khiển Servo van thông gió
+  ledcSetup(SERVO_LEDC_CH, SERVO_LEDC_HZ, SERVO_LEDC_RES);
+  ledcAttachPin(PIN_SERVO, SERVO_LEDC_CH);
+  controlVentilationDamper(systemDamperRatio); // Góc mở mặc định ban đầu
+  Serial.printf("[Servo] Khoi tao PWM tren GPIO%d\n", PIN_SERVO);
+
   // 5. Cấu hình MQTT Broker
   mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
@@ -483,8 +526,8 @@ void loop() {
       float co2         = airSensor.getCO2();
 
       // Hiển thị thông số cục bộ lên cổng Serial
-      Serial.printf("[Sensor] CO2: %.1f ppm | Temp: %.1f *C | Hum: %.1f %%\n", 
-                    co2, temperature, humidity);
+      Serial.printf("[Sensor] CO2: %.1f ppm | Temp: %.1f *C | Hum: %.1f %% | PM2.5: %.1f ug/m3\n", 
+                    co2, temperature, humidity, latestPM25);
 
       // A. CHỈ CHẠY THUẬT TOÁN ĐIỀU KHIỂN NẾU HỆ THỐNG ĐƯỢC BẬT (POWER = ON)
       if (systemPowerState) {
@@ -523,14 +566,19 @@ void loop() {
         }
 
         // ===================================================================
-        // 2. THUẬT TOÁN ĐIỀU KHIỂN QUẠT TẢN THÔNG GIÓ (CO2 & ĐỘ ẨM)
+        // 2. THUẬT TOÁN ĐIỀU KHIỂN QUẠT TẢN THÔNG GIÓ (CO2, PM2.5 & ĐỘ ẨM)
         // ===================================================================
         bool nextFanState = currentFanState;
 
         if (fanMode == "auto") {
-          if (co2 > CO2_MAX || humidity > HUMIDITY_MAX) {
+          // Bật quạt khi nồng độ CO2, PM2.5 hoặc Độ ẩm vượt quá ngưỡng thoải mái
+          if (co2 > CO2_MAX || latestPM25 > PM25_MAX || humidity > HUMIDITY_MAX) {
             nextFanState = true;
-          } else if (co2 < (CO2_MAX - CO2_HYSTERESIS) && humidity < (HUMIDITY_MAX - HUMIDITY_HYSTERESIS)) {
+          } 
+          // Chỉ tắt quạt khi tất cả thông số đều giảm xuống dưới ngưỡng an toàn
+          else if (co2 < (CO2_MAX - CO2_HYSTERESIS) && 
+                   latestPM25 < (PM25_MAX - PM25_HYSTERESIS) && 
+                   humidity < (HUMIDITY_MAX - HUMIDITY_HYSTERESIS)) {
             nextFanState = false;
           }
         } else {
@@ -547,9 +595,36 @@ void loop() {
           Serial.printf("  --> [QUAT Local] Cap nhat Relay Quat: %s\n", 
                         nextFanState ? "ON (BAT QUAT)" : "OFF (TAT QUAT)");
         }
+
+        // ===================================================================
+        // 3. THUẬT TOÁN ĐIỀU KHIỂN GÓC MỞ VAN THÔNG GIÓ (SERVO)
+        // ===================================================================
+        if (fanMode == "auto") {
+          if (WiFi.status() != WL_CONNECTED || !mqttClient.connected()) {
+            // Chế độ tự động cục bộ khi mất mạng:
+            // Tính toán tỷ lệ mở van tỉ lệ thuận với mức độ vượt ngưỡng của CO2 hoặc PM2.5
+            float co2Ratio = (co2 - 400.0) / (CO2_MAX - 400.0);
+            float pm25Ratio = latestPM25 / PM25_MAX;
+            float localDamper = max(co2Ratio, pm25Ratio);
+            systemDamperRatio = constrain(localDamper, 0.2, 1.0); // Giới hạn từ 20% đến 100%
+          }
+        } else {
+          // Chế độ thủ công
+          if (fanManualState == "on") {
+            systemDamperRatio = 1.0; // Mở tối đa 100%
+          } else {
+            systemDamperRatio = 0.2; // Đóng về mức tối thiểu 20%
+          }
+        }
+
+        controlVentilationDamper(systemDamperRatio);
+        Serial.printf("[Control] Van mo: %.0f%% (Goc Servo: %d deg)\n", 
+                      systemDamperRatio * 100.0, (int)(systemDamperRatio * 90.0));
+
       } else {
         // Trạng thái nguồn tắt (Standby)
         Serial.println("  --> [System State] Che do cho (Standby). Chờ lenh tu xa...");
+        controlVentilationDamper(0.2); // Khép van về mức tối thiểu khi tắt nguồn
       }
 
       // ===================================================================

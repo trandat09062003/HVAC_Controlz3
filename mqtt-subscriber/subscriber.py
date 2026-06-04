@@ -270,6 +270,7 @@ class ZoneManager:
         # Ngưỡng CO2 và Độ ẩm tối ưu tự động bởi AI
         co2_max = 800.0
         humidity_max = 60.0
+        D_oa = 0.3 # Default damper opening
         reason = "Đang áp dụng chính sách thời gian mặc định."
  
         # Logic DRL (Applied Energy 2025):
@@ -338,6 +339,7 @@ class ZoneManager:
                 fan_power = "high"  
                 co2_max = 600.0      
                 humidity_max = 55.0  
+                D_oa = 1.0
                 reason = f"Rule-Based (Free Cooling): Trời mát ({outdoor_temp:.1f}°C) hơn trong phòng ({temperature:.1f}°C). MỞ CỬA SỔ và chạy quạt thông gió!"
             else:
                 if policy == "working_hours":
@@ -346,6 +348,7 @@ class ZoneManager:
                     fan_power = "auto"
                     co2_max = 700.0      
                     humidity_max = 60.0  
+                    D_oa = 0.5
                     reason = "Rule-Based (Giờ làm việc): Duy trì độ mát tối ưu."
                 elif policy == "night_eco":
                     target_temp = 26.5  
@@ -353,6 +356,7 @@ class ZoneManager:
                     fan_power = "low"   
                     co2_max = 950.0      
                     humidity_max = 65.0  
+                    D_oa = 0.3
                     reason = "Rule-Based (Ngủ đêm ECO): Tăng nhẹ nhiệt độ và giảm ồn quạt."
                 elif policy == "eco_standby":
                     power = False
@@ -361,6 +365,7 @@ class ZoneManager:
                     fan_power = "off"
                     co2_max = 1200.0     
                     humidity_max = 75.0
+                    D_oa = 0.2
                     reason = "Rule-Based (Ngoài giờ): Đưa Zone về chế độ chờ Standby tiết kiệm điện."
  
         self.last_recommendation = reason
@@ -371,7 +376,8 @@ class ZoneManager:
             "operationMode": op_mode,
             "fanPower": fan_power,
             "co2Max": co2_max,
-            "humidityMax": humidity_max
+            "humidityMax": humidity_max,
+            "damper": round(D_oa, 2)
         }
  
         if self.last_applied_state.get(device_id) != new_state:
@@ -385,6 +391,7 @@ class ZoneManager:
                 "fanPower": fan_power,
                 "co2Max": co2_max,
                 "humidityMax": humidity_max,
+                "damper": round(D_oa, 2),
                 "clientId": "ai-zone-manager",
                 "requestedAt": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
             }
