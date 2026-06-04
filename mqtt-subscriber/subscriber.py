@@ -308,11 +308,11 @@ class ZoneManager:
                 # Map actions
                 a = (np.clip(action, -1.0, 1.0) + 1.0) / 2.0  # -> [0, 1]
                 
-                T_chws = 5.0 + a[0] * 10.0
-                target_temp = round(22.0 + (T_chws - 5.0) / 2.0, 1)
+                T_chws = float(5.0 + a[0] * 10.0)
+                target_temp = float(round(22.0 + (T_chws - 5.0) / 2.0, 1))
                 
-                f_sa = 0.1 + a[2] * 0.9
-                D_oa = 0.2 + a[1] * 0.8
+                f_sa = float(0.1 + a[2] * 0.9)
+                D_oa = float(0.2 + a[1] * 0.8)
                 fan_on = (f_sa > 0.20) or (D_oa > 0.30)
                 
                 op_mode = "cool" if T_chws < 10.0 else "auto"
