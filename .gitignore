@@ -16,9 +16,15 @@ esp/station/main/Kconfig.projbuild
 # Python / ML
 __pycache__/
 *.pyc
+*.pyo
+*.o
 .venv/
 venv/
 .ipynb_checkpoints/
 paper_reference/logs/
 paper_reference/.venv/
 paper_reference/miniconda3/
+
+# Generated at runtime
+server/mqtt-subscriber/actor_weights.npz
+server/mqtt-subscriber/power_config.json

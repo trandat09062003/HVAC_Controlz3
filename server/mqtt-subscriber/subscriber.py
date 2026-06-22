@@ -4,9 +4,12 @@ import psycopg2
 import os
 import time
 import numpy as np
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from urllib.parse import urlparse
+
+from building_simulator import building_sim
 
 # Config
 MQTT_BROKER = os.getenv('MQTT_BROKER', 'mosquitto')
@@ -102,94 +105,39 @@ def get_outdoor_temperature(payload):
             return value
     return None
 
-def calculate_simulated_power(payload, latest_control):
-    # Baseload / Standby power for sensor/electronics
-    standby_power = 5.0
-    ac_power = 0.0
-    fan_power = 0.0
-    
-    current_temp = to_float(payload.get('temperature'))
-    co2 = to_int(payload.get('co2'))
+def calculate_simulated_power(payload, latest_control, drl_physical=None):
+    """Paper-based building power model (Guo et al. 2025) with per-device breakdown."""
+    temp = to_float(payload.get('temperature'))
     humidity = to_float(payload.get('humidity'))
-    
-    # 1. AC Power for AI-optimized state
-    if latest_control:
-        device_power_on = latest_control.get('power', False)
-        target_temp = latest_control.get('temp', 25.0)
-        op_mode = latest_control.get('operationMode', 'auto')
-        fan_speed = latest_control.get('fanPower', 'auto')
-        
-        if device_power_on:
-            if op_mode == 'off':
-                ac_power = 0.0
-            elif op_mode == 'fan':
-                ac_power = 12.0  # Only indoor fan circulating air
-            else:
-                # determine cooling/heating
-                is_cooling = True
-                if op_mode == 'heat':
-                    is_cooling = False
-                elif op_mode == 'auto' and current_temp is not None:
-                    is_cooling = current_temp > target_temp
-                    
-                if current_temp is not None:
-                    if is_cooling:
-                        delta_t = current_temp - target_temp
-                        if delta_t <= 0:
-                            ac_power = 150.0  # Inverter compressor at lowest frequency
-                        else:
-                            ac_power = 250.0 + 400.0 * delta_t
-                            if ac_power > 1400.0:
-                                ac_power = 1400.0
-                    else:  # Heating
-                        delta_t = target_temp - current_temp
-                        if delta_t <= 0:
-                            ac_power = 100.0
-                        else:
-                            ac_power = 200.0 + 350.0 * delta_t
-                            if ac_power > 1200.0:
-                                ac_power = 1200.0
-                else:
-                    ac_power = 300.0  # Default moderate cooling load
-                    
-        # 2. Fan Power for AI-optimized state
-        fan_running = False
-        if fan_speed in ['on', 'high', 'medium', 'low']:
-            fan_running = True
-        elif fan_speed == 'auto':
-            co2_max = latest_control.get('co2Max', 800.0)
-            humidity_max = latest_control.get('humidityMax', 60.0)
-            if co2 is not None and co2 > co2_max:
-                fan_running = True
-            if humidity is not None and humidity > humidity_max:
-                fan_running = True
-                
-        if fan_running:
-            fan_power = 45.0  # Fan power draw
-            
-    total_power_w = standby_power + ac_power + fan_power
-    
-    # 3. Baseline Power (Traditional setup: constant Cool mode @ 24C, fan always ON)
-    ac_base_power = 0.0
-    if current_temp is not None:
-        delta_t_base = current_temp - 24.0
-        if delta_t_base <= 0:
-            ac_base_power = 150.0
-        else:
-            ac_base_power = 250.0 + 400.0 * delta_t_base
-            if ac_base_power > 1400.0:
-                ac_base_power = 1400.0
-    else:
-        ac_base_power = 350.0
-        
-    fan_base_power = 45.0  # Traditional fan is always ON for ventilation safety
-    total_base_power_w = standby_power + ac_base_power + fan_base_power
-    
+    co2 = to_int(payload.get('co2')) or 400
+    dust = to_float(payload.get('dust')) or 10.0
+    outdoor_temp = get_outdoor_temperature(payload)
+
+    if temp is None:
+        temp = 25.0
+    if humidity is None:
+        humidity = 50.0
+
+    ai_snap = building_sim.simulate_step(
+        temp, humidity, co2, dust, outdoor_temp, drl_physical, baseline=False
+    )
+    base_snap = building_sim.simulate_step(
+        temp, humidity, co2, dust, outdoor_temp, None, baseline=True
+    )
+
+    ai_dev = ai_snap["devices"]
+    chiller_w = ai_dev.get("chiller", {}).get("power_w", 0) + ai_dev.get("pump", {}).get("power_w", 0)
+    fan_w = ai_dev.get("supply_fan", {}).get("power_w", 0)
+
     return {
-        'power_w': total_power_w,
-        'power_ac_w': ac_power,
-        'power_fan_w': fan_power,
-        'power_base_w': total_base_power_w
+        'power_w': ai_snap['total_power_w'],
+        'power_ac_w': chiller_w,
+        'power_fan_w': fan_w,
+        'power_base_w': base_snap['total_power_w'],
+        'device_breakdown': ai_snap['devices'],
+        'baseline_breakdown': base_snap['devices'],
+        'sim_snapshot': ai_snap,
+        'baseline_snapshot': base_snap,
     }
 
 # ====================== AI ZONE MANAGER ======================
@@ -213,14 +161,18 @@ class ZoneManager:
         import datetime
         now = datetime.datetime.now()
         hour = now.hour
-        
-        # 8h sáng - 17h chiều: Giờ làm việc (Working Hours)
+        occ = max(1, int(building_sim.config.get("occupancy_count", 1)))
+
+        # Phòng luôn có 1 người — không tắt HVAC ở eco_standby
+        if occ >= 1:
+            if 8 <= hour < 22:
+                return "working_hours"
+            return "night_eco"
+
         if 8 <= hour < 17:
             return "working_hours"
-        # 10h đêm - 6h sáng: Tiết kiệm ban đêm (Night Eco)
         elif hour >= 22 or hour < 6:
             return "night_eco"
-        # Các giờ khác: Chế độ chờ tiết kiệm (Eco Standby)
         else:
             return "eco_standby"
 
@@ -231,9 +183,9 @@ class ZoneManager:
         if self.actor_weights is None:
             return None
         
-        # State normalization (Boundaries from replicate_and_compare.py)
-        state_min = np.array([0, -5, 0.002, 0, 390, 0, 15, 0.003, 400, 0], dtype=np.float32)
-        state_max = np.array([24, 40, 0.025, 900, 510, 80, 35, 0.022, 2000, 50], dtype=np.float32)
+        # State normalization — Hà Nội (train_hanoi.py bounds)
+        state_min = np.array([0, 18, 0.006, 0, 390, 0, 22, 0.008, 400, 0], dtype=np.float32)
+        state_max = np.array([24, 42, 0.026, 900, 520, 80, 36, 0.024, 2000, 50], dtype=np.float32)
         norm_state = (np.array(state) - state_min) / (state_max - state_min + 1e-8)
         
         # NumPy forward pass
@@ -300,21 +252,22 @@ class ZoneManager:
                 pm_out = dust if dust is not None else 10.0
                 pm_in = max(0.0, pm_out * 0.75)
                 
-                # State vector: hour, T_oa, omega_oa, q_sol, 450.0, pm_out, T_za, omega_za, co2, pm_in
-                state = np.array([
-                    hour, T_oa, omega_oa, q_sol, 450.0, pm_out, temperature, omega_za, co2, pm_in
-                ], dtype=np.float32)
+                state_list = building_sim.build_state_vector(
+                    temperature, humidity, co2, dust if dust is not None else 10.0, outdoor_temp
+                )
+                state = np.array(state_list, dtype=np.float32)
                 
                 action = self._run_drl_inference(state)
+                hour = state_list[0]
+                physical = building_sim.map_action_physical(action, hour)
                 
                 # Map actions
                 a = (np.clip(action, -1.0, 1.0) + 1.0) / 2.0  # -> [0, 1]
                 
-                T_chws = float(5.0 + a[0] * 10.0)
-                target_temp = float(round(22.0 + (T_chws - 5.0) / 2.0, 1))
-                
-                f_sa = float(0.1 + a[2] * 0.9)
-                D_oa = float(0.2 + a[1] * 0.8)
+                T_chws = physical["T_chws"]
+                target_temp = physical["target_temp"]
+                f_sa = physical["f_sa"]
+                D_oa = physical["D_oa"]
                 fan_on = (f_sa > 0.20) or (D_oa > 0.30)
                 
                 op_mode = "cool" if T_chws < 10.0 else "auto"
@@ -333,7 +286,8 @@ class ZoneManager:
                 self.actor_weights = None  # Force rule fallback
                 
         # Rule Fallback (if DRL weights not loaded or inference failed)
-        if self.actor_weights is None or policy == "eco_standby":
+        occ = max(1, int(building_sim.config.get("occupancy_count", 1)))
+        if self.actor_weights is None or (policy == "eco_standby" and occ < 1):
             if outdoor_temp is not None and outdoor_temp < temperature - 1.5 and policy != "eco_standby":
                 target_temp = 28.0  
                 op_mode = "fan"     
@@ -475,6 +429,7 @@ def fetch_telemetry():
         }
 
     latest = {
+        'device_id': latest_primary.get('device_id') if latest_primary else None,
         'temperature': latest_primary.get('temperature') if latest_primary else None,
         'outdoor_temperature': None,
         'humidity': latest_primary.get('humidity') if latest_primary else None,
@@ -489,6 +444,16 @@ def fetch_telemetry():
         'power_fan': latest_primary.get('power_fan') if latest_primary else 0.0,
         'valve_angle': latest_primary.get('valve_angle') if latest_primary else 0,
     }
+
+    is_online = False
+    if latest_primary and latest_primary.get('time'):
+        try:
+            last_seen = datetime.fromisoformat(latest_primary['time'])
+            age_seconds = (datetime.now(last_seen.tzinfo) - last_seen).total_seconds()
+            is_online = age_seconds <= 30
+        except (TypeError, ValueError):
+            is_online = False
+    latest['is_online'] = is_online
 
     if latest_outdoor:
         latest['outdoor_temperature'] = (
@@ -553,6 +518,12 @@ def fetch_telemetry():
     override_active = time.time() < zone_manager.override_until
     remaining_override = int(zone_manager.override_until - time.time()) if override_active else 0
 
+    power_config = building_sim.get_config()
+    if building_sim.last_sim_snapshot:
+        for key, dev in building_sim.last_sim_snapshot.get('devices', {}).items():
+            if key in power_config.get('devices', {}):
+                power_config['devices'][key]['power_w'] = dev.get('power_w', 0)
+
     return {
         'latest': latest,
         'history': history[-20:],
@@ -563,7 +534,11 @@ def fetch_telemetry():
             'remainingOverride': remaining_override,
             'scheduledPolicy': zone_manager.get_scheduled_policy(),
             'aiRecommendation': zone_manager.last_recommendation
-        }
+        },
+        'building': building_sim.get_building_status(is_online),
+        'buildingSim': building_sim.last_sim_snapshot,
+        'drlPanel': building_sim.get_drl_panel(),
+        'powerConfig': power_config,
     }
 
 
@@ -605,6 +580,20 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == '/api/power-config':
+            try:
+                body = json.dumps(building_sim.get_config()).encode('utf-8')
+                self.send_response(200)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(500)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            return
+
         if parsed.path != '/api/telemetry':
             self.send_response(404)
             self.send_common_headers()
@@ -626,6 +615,24 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == '/api/power-config':
+            try:
+                content_length = int(self.headers.get('Content-Length', '0'))
+                raw_body = self.rfile.read(content_length).decode('utf-8')
+                payload = json.loads(raw_body or '{}')
+                saved = building_sim.save_config(payload)
+                body = json.dumps({'ok': True, 'config': saved}).encode('utf-8')
+                self.send_response(200)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(400)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            return
+
         if parsed.path != '/api/remote-control':
             self.send_response(404)
             self.send_common_headers()
@@ -751,8 +758,16 @@ def on_message(client, userdata, msg):
             prev_energy = prev_row[1] if prev_row[1] is not None else 0.0
             prev_energy_base = prev_row[2] if len(prev_row) > 2 and prev_row[2] is not None else 0.0
 
-        # 3. Calculate simulated power
-        sim_data = calculate_simulated_power(payload, latest_control)
+        # 3. Build DRL state & run AI control before power simulation
+        dust_val = to_float(payload.get('dust')) or 10.0
+        if temp is not None and humidity is not None and co2 is not None:
+            building_sim.build_state_vector(temp, humidity, co2, dust_val, outdoor_temp)
+
+        if device_id != 'unknown':
+            zone_manager.evaluate_and_control(device_id, temp, co2, humidity, outdoor_temp, dust_val)
+
+        drl_physical = building_sim.last_drl_action_physical
+        sim_data = calculate_simulated_power(payload, latest_control, drl_physical)
         power_w = sim_data['power_w']
         power_ac_w = sim_data['power_ac_w']
         power_fan_w = sim_data['power_fan_w']
@@ -806,11 +821,6 @@ def on_message(client, userdata, msg):
         conn.commit()
         
         print(f"✅ Saved → Device: {device_id} | Temp: {temp} | CO2: {co2} | Power: {power_w:.1f}W | Energy: {energy_kwh:.4f}kWh | BaseEnergy: {energy_base_kwh:.4f}kWh")
-        
-        # Gọi bộ quản lý Zone tự động đánh giá và điều khiển
-        if device_id != 'unknown':
-            dust = to_float(payload.get('dust'))
-            zone_manager.evaluate_and_control(device_id, temp, co2, humidity, outdoor_temp, dust)
         
     except Exception as e:
         print(f"❌ Error processing message: {e} | Topic: {msg.topic}")

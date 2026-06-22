@@ -24,19 +24,23 @@
 // =========================================================================
 
 // 1. Cấu hình kết nối WiFi
-#define WIFI_SSID        "Kata"                // Tên mạng WiFi
-#define WIFI_PASSWORD    "Katana3936@"         // Mật khẩu WiFi
+#define WIFI_SSID        "TenMangWiFi"         // Tên mạng WiFi
+#define WIFI_PASSWORD    "MatKhauWiFi"         // Mật khẩu WiFi
 
-// 2. Cấu hình MQTT Broker (Máy tính chạy Docker)
-#define MQTT_SERVER      "103.90.225.155"      // IP máy chủ Cloud VPS chạy Docker
+// 2. Cấu hình MQTT Broker
+// LOCAL:  "192.168.1.21"   — Docker trên máy tính (cùng WiFi)
+// VPS/local: IP máy chạy Docker (docker-compose.alt.yml → port 1885)
+#define MQTT_SERVER      "192.168.1.100"
 #define MQTT_PORT        1885                  // Cổng MQTT host (docker-compose.alt.yml)
 #define MQTT_DEVICE_ID   "indoor-01"           // ID thiết bị
 #define MQTT_PUB_TOPIC   "sensor/indoor"       // Topic gửi dữ liệu cảm biến
 #define MQTT_SUB_TOPIC   "remote-control/#"    // Topic nhận phản hồi điều khiển từ AI (để hiển thị LCD)
 
 // 3. Cấu hình chân kết nối phần cứng (Pin Definitions)
-#define I2C_SDA          8     // Chân SDA nối cảm biến SCD30 và LCD (Physical Pin 12 -> GPIO8)
-#define I2C_SCL          9     // Chân SCL nối cảm biến SCD30 và LCD (Physical Pin 15 -> GPIO9)
+#define LCD_SDA          10    // Chân SDA nối LCD (Physical Pin 16 -> GPIO10)
+#define LCD_SCL          11    // Chân SCL nối LCD (Physical Pin 17 -> GPIO11)
+#define SCD_SDA          8     // Chân SDA nối cảm biến SCD30 (Physical Pin 12 -> GPIO8)
+#define SCD_SCL          9     // Chân SCL nối cảm biến SCD30 (Physical Pin 15 -> GPIO9)
 #define PIN_RGB_WS2812   48    // Chân điều khiển LED RGB WS2812B tích hợp trên board ESP32-S3
 
 // Cấu hình chân UART cho cảm biến bụi PMS7003
@@ -95,12 +99,16 @@ void updateLCD() {
     lcd.setCursor(0, 1);
     lcd.printf("PM25:%3.0f H:%4.1f%%", currentPM25, currentHum);
   } else {
-    // --- MÀN HÌNH 2: HIỂN THỊ TRẠNG THÁI MÔ PHỎNG AI ---
+    // --- MÀN HÌNH 2: HIỂN THỊ TRẠNG THÁI KẾT NỐI & AI ---
     if (!receivedAiState) {
       lcd.setCursor(0, 0);
-      lcd.print("AI System Sync..");
+      if (mqttClient.connected()) {
+        lcd.printf("ID:%s MQTT:OK", MQTT_DEVICE_ID);
+      } else {
+        lcd.printf("ID:%s MQTT:ERR", MQTT_DEVICE_ID);
+      }
       lcd.setCursor(0, 1);
-      lcd.print("Waiting server..");
+      lcd.print("Waiting AI server");
     } else {
       // Dòng 0: AI:XX.X Mode:XXX
       lcd.setCursor(0, 0);
@@ -331,21 +339,26 @@ void setup() {
   Serial.println("  KHOI DONG NODE CAM BIEN HVAC SMART-IOT + LCD MONITOR");
   Serial.println("=======================================================");
 
+  // Khởi tạo bus I2C cho LCD
+  Serial.printf("[I2C LCD] Khoi tao bus: SDA -> GPIO%d, SCL -> GPIO%d...\n", LCD_SDA, LCD_SCL);
+  Wire.begin(LCD_SDA, LCD_SCL);
+
   // Khởi tạo màn hình LCD I2C
   lcd.init();
+  Wire.begin(LCD_SDA, LCD_SCL); // Gọi lại để đảm bảo chân LCD được cấu hình đúng sau lcd.init()
   lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("Smart HVAC Node ");
   lcd.setCursor(0, 1);
   lcd.print("Initializing... ");
 
-  // Khởi tạo bus I2C tùy biến
-  Serial.printf("[I2C] Khoi tao bus: SDA -> GPIO%d, SCL -> GPIO%d...\n", I2C_SDA, I2C_SCL);
-  Wire.begin(I2C_SDA, I2C_SCL);
+  // Khởi tạo bus I2C cho cảm biến SCD30
+  Serial.printf("[I2C SCD30] Khoi tao bus: SDA -> GPIO%d, SCL -> GPIO%d...\n", SCD_SDA, SCD_SCL);
+  Wire1.begin(SCD_SDA, SCD_SCL);
 
   // Khởi tạo cảm biến SCD30
   Serial.println("[SCD30] Dang ket noi voi cam bien...");
-  if (airSensor.begin(Wire) == false) {
+  if (airSensor.begin(Wire1) == false) {
     Serial.println("[LOI] Khong tim thay cam bien SCD30!");
     scd30Ready = false;
     lcd.clear();
@@ -385,21 +398,24 @@ void loop() {
   if (now - lastReadTime >= READ_INTERVAL) {
     lastReadTime = now;
 
+    bool sensorOk = false;
     if (scd30Ready && airSensor.dataAvailable()) {
       currentTemp = airSensor.getTemperature();
       currentHum = airSensor.getHumidity();
       currentCO2 = airSensor.getCO2();
+      sensorOk = true;
     }
 
-    Serial.printf("[Sensor] CO2: %.1f ppm | Temp: %.1f *C | Hum: %.1f %% | PM2.5: %.1f ug/m3\n", 
-                  currentCO2, currentTemp, currentHum, currentPM25);
+    Serial.printf("[Sensor] CO2: %.1f ppm | Temp: %.1f *C | Hum: %.1f %% | PM2.5: %.1f ug/m3 | SCD30: %s\n",
+                  currentCO2, currentTemp, currentHum, currentPM25, sensorOk ? "OK" : "NO DATA");
 
-    // Gửi dữ liệu cảm biến lên MQTT Broker
+    // Gửi MQTT khi kết nối (kèm cờ sensor_ok để server biết dữ liệu thật/giữ)
     if (mqttClient.connected()) {
-      char jsonPayload[256];
+      char jsonPayload[280];
       snprintf(jsonPayload, sizeof(jsonPayload),
-               "{\"device_id\":\"%s\",\"temperature\":%.2f,\"outdoor_temperature\":%.2f,\"humidity\":%.2f,\"co2\":%d,\"dust\":%.2f}",
-               MQTT_DEVICE_ID, currentTemp, (currentTemp + 3.2), currentHum, (int)currentCO2, currentPM25);
+               "{\"device_id\":\"%s\",\"sensor_ok\":%s,\"temperature\":%.2f,\"outdoor_temperature\":%.2f,\"humidity\":%.2f,\"co2\":%d,\"dust\":%.2f}",
+               MQTT_DEVICE_ID, sensorOk ? "true" : "false",
+               currentTemp, (currentTemp + 3.2), currentHum, (int)currentCO2, currentPM25);
 
       Serial.printf("[MQTT Publish] Gui len [%s]: %s\n", MQTT_PUB_TOPIC, jsonPayload);
       mqttClient.publish(MQTT_PUB_TOPIC, jsonPayload);

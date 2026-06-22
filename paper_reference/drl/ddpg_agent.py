@@ -127,11 +127,11 @@ class DDPGAgentV2:
         os.makedirs(path, exist_ok=True)
         self.actor.save_weights(f'{path}/actor.weights.h5')
         self.critic.save_weights(f'{path}/critic.weights.h5')
-        print(f"  [Saved v2] → {path}/")
+        print(f"  [Saved v2] -> {path}/")
 
     def load(self, path='checkpoints_v2'):
         self.actor.load_weights(f'{path}/actor.weights.h5')
         self.critic.load_weights(f'{path}/critic.weights.h5')
         self.target_actor.set_weights(self.actor.get_weights())
         self.target_critic.set_weights(self.critic.get_weights())
-        print(f"  [Loaded v2] ← {path}/")
+        print(f"  [Loaded v2] <- {path}/")

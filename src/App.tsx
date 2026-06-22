@@ -12,14 +12,20 @@ import {
   CloudRain,
   CloudSun,
   MapPin,
-  RotateCw
+  Building2,
+  Brain,
+  Zap,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import mainLogo from '../img/main_logo_2.png';
 import { MetricCard } from './components/MetricCard';
 import { RealTimeChart } from './components/RealTimeChart';
 import { ControlPanel } from './components/ControlPanel';
-import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo } from './types';
+import { BuildingVisualization } from './components/BuildingVisualization';
+import { DevicePowerPanel } from './components/DevicePowerPanel';
+import { DRLModelPanel } from './components/DRLModelPanel';
+import { EnergyBreakdownChart } from './components/EnergyBreakdownChart';
+import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo, DashboardTab, BuildingSimSnapshot, DRLPanel, PowerConfig, BuildingInfo } from './types';
 import { cn } from './lib/utils';
 
 // Helper to determine status based on thresholds
@@ -118,6 +124,9 @@ export default function App() {
 
   const [history, setHistory] = useState<ChartDataPoint[]>([]);
   const [latestValveAngle, setLatestValveAngle] = useState<number>(0);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(false);
+  const [lastTelemetryTime, setLastTelemetryTime] = useState<string | null>(null);
   const [hvacState, setHvacState] = useState<HVACState>({
     power: true,
     mode: 'auto',
@@ -143,6 +152,11 @@ export default function App() {
   const [latestPowerFan, setLatestPowerFan] = useState<number>(0);
   const [latestPowerBase, setLatestPowerBase] = useState<number>(0);
   const [latestEnergyBase, setLatestEnergyBase] = useState<number>(0);
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const [buildingInfo, setBuildingInfo] = useState<BuildingInfo | null>(null);
+  const [buildingSim, setBuildingSim] = useState<BuildingSimSnapshot | null>(null);
+  const [drlPanel, setDrlPanel] = useState<DRLPanel | null>(null);
+  const [powerConfig, setPowerConfig] = useState<PowerConfig | null>(null);
 
   useEffect(() => {
     hvacStateRef.current = hvacState;
@@ -168,7 +182,7 @@ export default function App() {
 
   const postRemoteControl = useCallback(async (nextState: HVACState, requestedAt: string) => {
     const payload: RemoteControlPayload = {
-      device_id: 'indoor-01',
+      device_id: deviceId ?? 'indoor-01',
       power: nextState.power,
       temp: nextState.targetTemp,
       operationMode: nextState.mode,
@@ -201,7 +215,19 @@ export default function App() {
     } finally {
       window.clearTimeout(timeout);
     }
-  }, [clientId]);
+  }, [clientId, deviceId]);
+
+  const savePowerConfig = useCallback(async (updates: Partial<PowerConfig>) => {
+    const response = await fetch('/api/power-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!response.ok) throw new Error('Failed to save power config');
+    const result = await response.json();
+    setPowerConfig(result.config);
+    showToast('info', 'Đã lưu cấu hình điện năng thiết bị');
+  }, [showToast]);
 
   const sendRemoteControl = useCallback(async (getNextState: (state: HVACState) => HVACState) => {
     const previousState = hvacStateRef.current;
@@ -268,6 +294,9 @@ export default function App() {
         const telemetry: TelemetryResponse = await response.json();
         setHistory(telemetry.history);
         if (telemetry.latest) {
+          setDeviceId(telemetry.latest.device_id ?? telemetry.controlState?.device_id ?? null);
+          setIsDeviceOnline(telemetry.latest.is_online ?? false);
+          setLastTelemetryTime(telemetry.latest.time ?? null);
           setLatestPower(telemetry.latest.power ?? 0);
           setLatestEnergy(telemetry.latest.energy ?? 0);
           setLatestPowerAc(telemetry.latest.power_ac ?? 0);
@@ -278,6 +307,10 @@ export default function App() {
         if (telemetry.zoneManager) {
           setZoneManager(telemetry.zoneManager);
         }
+        if (telemetry.building) setBuildingInfo(telemetry.building);
+        if (telemetry.buildingSim) setBuildingSim(telemetry.buildingSim);
+        if (telemetry.drlPanel) setDrlPanel(telemetry.drlPanel);
+        if (telemetry.powerConfig) setPowerConfig(telemetry.powerConfig);
         if (telemetry.controlState) {
           const incomingState = remoteToHVACState(telemetry.controlState);
           const incomingRevision = getControlRevision(telemetry.controlState);
@@ -318,7 +351,7 @@ export default function App() {
           if (reading.id === 'pm25') return updateReading(reading, telemetry.latest.dust);
           return reading;
         }));
-        setLatestValveAngle(telemetry.latest.valve_angle ?? 0);
+        setLatestValveAngle(telemetry.latest.valve_angle ?? buildingSim?.airflow?.damper_pct ?? latestValveAngle);
       } catch (error) {
         console.error(error);
       }
@@ -379,6 +412,13 @@ export default function App() {
     }, {}) ?? {};
   }, [pendingControl]);
 
+  const TABS: { id: DashboardTab; label: string; icon: React.ElementType }[] = [
+    { id: 'overview', label: 'Tổng quan', icon: Activity },
+    { id: 'building', label: 'Tòa nhà', icon: Building2 },
+    { id: 'ai', label: 'AI / DDPG', icon: Brain },
+    { id: 'energy', label: 'Điện năng', icon: Zap },
+  ];
+
   return (
     <div className="min-h-screen text-slate-100 overflow-x-clip selection:bg-blue-500/20">
       {/* --- TOP BAR --- */}
@@ -395,16 +435,20 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="hidden md:flex items-center gap-4 border-r border-slate-800 pr-6 mr-2">
             <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse animate-glow-emerald" />
-              <span className="text-[9px] font-black uppercase text-slate-400">Node ESP32: Online</span>
+              <span className={cn("w-1.5 h-1.5 rounded-full", isDeviceOnline ? "bg-emerald-500 animate-pulse animate-glow-emerald" : "bg-red-500")} />
+              <span className="text-[9px] font-black uppercase text-slate-400">
+                Node ESP32: {isDeviceOnline ? 'Online' : 'Offline'}
+              </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse animate-glow-emerald" />
-              <span className="text-[9px] font-black uppercase text-slate-400">Broker MQTT: Connected</span>
+              <span className={cn("w-1.5 h-1.5 rounded-full", isDeviceOnline ? "bg-emerald-500 animate-pulse animate-glow-emerald" : "bg-amber-500")} />
+              <span className="text-[9px] font-black uppercase text-slate-400">
+                MQTT: {isDeviceOnline ? 'Connected' : 'Waiting'}
+              </span>
             </div>
             <div className="flex flex-col items-end pl-2">
-              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-widest">Uptime</span>
-              <span className="text-[10px] font-mono text-slate-300 font-bold">12d 04h 22m</span>
+              <span className="text-[9px] text-slate-500 uppercase font-bold tracking-widest">Occupancy</span>
+              <span className="text-[10px] font-mono text-amber-400 font-bold">1 người</span>
             </div>
           </div>
 
@@ -430,36 +474,93 @@ export default function App() {
             {/* Header info */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-black tracking-tight text-white uppercase">Tổng quan hệ thống</h2>
-                <p className="text-slate-500 text-xs mt-0.5">Khu vực: Phòng Server Hall A-42 • Tầng 12</p>
+                <h2 className="text-xl font-black tracking-tight text-white uppercase">Smart HVAC Digital Twin</h2>
+                <p className="text-slate-500 text-xs mt-0.5">
+                  {buildingInfo?.zone_id ?? 'Zone A'} • {deviceId ?? 'Chưa kết nối'}
+                  {lastTelemetryTime && (
+                    <span className="ml-2">• {new Date(lastTelemetryTime).toLocaleString('vi-VN')}</span>
+                  )}
+                </p>
               </div>
-              <div className="flex gap-2">
-                <button className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/40 hover:bg-slate-800 border border-slate-850 hover:border-slate-700 rounded-xl text-[10px] font-bold text-slate-300 transition-colors cursor-pointer">
-                  <History className="w-3.5 h-3.5" />
-                  Nhật ký Lỗi
-                </button>
-                <button className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/40 hover:bg-slate-800 border border-slate-850 hover:border-slate-700 rounded-xl text-[10px] font-bold text-slate-300 transition-colors cursor-pointer">
-                  <Maximize2 className="w-3.5 h-3.5" />
-                  Toàn màn hình
-                </button>
+              <div className="flex gap-1 p-1 bg-slate-950/60 rounded-xl border border-slate-800">
+                {TABS.map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={cn(
+                      'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer',
+                      activeTab === tab.id
+                        ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
+                        : 'text-slate-500 hover:text-slate-300'
+                    )}
+                  >
+                    <tab.icon className="w-3 h-3" />
+                    <span className="hidden sm:inline">{tab.label}</span>
+                  </button>
+                ))}
               </div>
             </div>
 
+            {!isDeviceOnline && (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>
+                  ESP32 chưa gửi dữ liệu mới (quá 30 giây). Kiểm tra WiFi, MQTT broker (<code className="text-amber-100">host:1885</code>) và upload lại firmware.
+                </span>
+              </div>
+            )}
+
+            {/* Tab: Overview */}
+            {activeTab === 'overview' && (
+              <>
             {/* Metric Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
               <MetricCard reading={readings[0]} icon={Thermometer} />
               <MetricCard reading={readings[1]} icon={Droplets} />
               <MetricCard reading={readings[2]} icon={Wind} />
               <MetricCard reading={readings[3]} icon={Activity} />
-              <MetricCard reading={{id: 'valve_angle', name: 'Độ mở Van gió', value: latestValveAngle, unit: '°', status: 'good', trend: 0 }} icon={RotateCw} />
+              <MetricCard reading={{id: 'valve_angle', name: 'Van gió tươi', value: buildingSim?.airflow.damper_pct ?? latestValveAngle, unit: '%', status: 'good', trend: 0 }} icon={Wind} />
             </div>
 
-            {/* Main Visualizations */}
             <div className="grid grid-cols-1 gap-6">
               <RealTimeChart data={history} />
             </div>
+              </>
+            )}
 
-            {/* Secondary Intel */}
+            {/* Tab: Building */}
+            {activeTab === 'building' && (
+              <div className="space-y-6">
+                <BuildingVisualization
+                  building={buildingInfo ?? undefined}
+                  sim={buildingSim}
+                  temperature={readings[0]?.value}
+                  isOnline={isDeviceOnline}
+                />
+                <EnergyBreakdownChart sim={buildingSim} />
+              </div>
+            )}
+
+            {/* Tab: AI / DDPG */}
+            {activeTab === 'ai' && (
+              <DRLModelPanel panel={drlPanel ?? undefined} policy={zoneManager?.currentPolicy} />
+            )}
+
+            {/* Tab: Energy config */}
+            {activeTab === 'energy' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <DevicePowerPanel
+                  config={powerConfig}
+                  totalPowerW={buildingSim?.total_power_w ?? latestPower}
+                  tariffVnd={powerConfig?.electricity_tariff_vnd ?? 2500}
+                  onSave={savePowerConfig}
+                />
+                <EnergyBreakdownChart sim={buildingSim} />
+              </div>
+            )}
+
+            {/* Secondary Intel — overview tab */}
+            {activeTab === 'overview' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                <div className="glass-panel rounded-2xl p-5 border border-slate-800/85 shadow-xl flex flex-col justify-between min-h-[250px]">
                   <div>
@@ -640,6 +741,7 @@ export default function App() {
                   </div>
                </div>
             </div>
+            )}
           </div>
 
           {/* Dashboard Right Section: Controls & Status */}

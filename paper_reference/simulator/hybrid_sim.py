@@ -26,7 +26,8 @@ class HybridSimulator:
     T_U, T_L = 24.5, 22.0   # °C ngưỡng nhiệt độ
     PHI_U    = 0.60          # ngưỡng RH
 
-    def __init__(self):
+    def __init__(self, fixed_occupancy: int = 0):
+        self.fixed_occupancy = fixed_occupancy  # 1 = phòng luôn có 1 người
         self.envelope = BuildingEnvelopeModel()
         self.humidity  = HumidityModel()
         self.co2       = CO2Model()
@@ -37,7 +38,9 @@ class HybridSimulator:
         self.Tw = 24.0  # °C — nhiệt độ khối nhiệt tường
 
     def _occupancy_schedule(self, hour):
-        """Lịch chiếm dụng theo Fig.7 — weekday"""
+        """Lịch chiếm dụng — fixed_occupancy=1: luôn 1 người trong phòng."""
+        if self.fixed_occupancy >= 1:
+            return 1.0 / self.N_OCC_MAX  # 1 người / 6 max
         if   6  <= hour < 8:  return 0.25
         elif 8  <= hour < 12: return 1.0
         elif 12 <= hour < 13: return 0.5
@@ -137,7 +140,7 @@ class HybridSimulator:
         f_co2 = 1.0 if C_CO2 >= 1000 else 0.0                     # Eq.19
         f_pm  = 1.0 if C_PM  >= 10   else 0.0                     # Eq.20
 
-        if 6 <= hour < 20:  # Occupied
+        if self.fixed_occupancy >= 1 or (6 <= hour < 20):  # Occupied (1 người cố định hoặc giờ làm việc)
             r = -(a1*E + a2*f_T + a3*f_phi + a4*f_co2 + a5*f_pm)
         else:               # Unoccupied
             r = -a1 * E
