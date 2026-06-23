@@ -6,6 +6,8 @@ Node cảm biến đo nhiệt độ, độ ẩm, CO₂ và PM₂.₅, gửi tele
 
 **Repository:** [github.com/trandat09062003/Smart_HVAC_AIOT](https://github.com/trandat09062003/Smart_HVAC_AIOT)
 
+**Tóm tắt cấu trúc file:** [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md)
+
 ---
 
 ## Kiến trúc hệ thống
@@ -61,10 +63,9 @@ Smart_HVAC_AIOT/
 │   ├── drl/                       DDPG agent, networks, replay buffer
 │   ├── simulator/                 Hybrid simulator (5 mô hình con)
 │   ├── data/                      weather_gen.py, hanoi_weather_gen.py
-│   ├── train.py                   Train Seoul
-│   ├── train_hanoi.py             Train Hà Nội (local CPU)
-│   ├── train_hanoi.ipynb          Train Hà Nội trên Colab GPU (khuyến nghị)
-│   └── evaluate.py
+│   ├── train.py                   Huấn luyện DDPG (local CPU)
+│   ├── train.ipynb                Huấn luyện Colab GPU
+│   └── checkpoints_hanoi/         Model Hà Nội (deploy)
 ├── src/                           Dashboard React (Digital Twin)
 ├── scripts/replicate_and_compare.py
 ├── docs/
@@ -120,23 +121,18 @@ Backup weights: [Google Drive](https://drive.google.com/drive/folders/1Z_hq9zdnd
 
 **Yêu cầu:** Python 3.12+, TensorFlow 2.x, NumPy, Matplotlib
 
-### Hà Nội (khuyến nghị cho triển khai thực tế)
-
-```bash
-# Colab GPU — mở paper_reference/train_hanoi.ipynb
-# Hoặc local CPU:
-cd paper_reference
-set HANOI_EPISODES=500
-python train_hanoi.py
-```
-
-### Seoul (bài báo gốc)
+### Hà Nội (triển khai thực tế)
 
 ```bash
 cd paper_reference
 python train.py
-python evaluate.py
 ```
+
+Colab GPU: mở `paper_reference/train.ipynb`, bật T4, chạy all cells.
+
+### Seoul (pretrain bài báo gốc)
+
+Checkpoint có sẵn tại `checkpoints_v2/` — dùng làm điểm khởi đầu fine-tune Hà Nội, không cần train lại.
 
 ### Export cho server
 
@@ -234,7 +230,7 @@ DB mặc định: `iotdb` / `admin` / `admin123` — đổi trước khi product
 | `Failed to load DRL weights` | Chạy `load_model.py`, rebuild container `mqtt-subscriber` |
 | Dashboard trống / offline | Kiểm tra IP/port MQTT, firewall, firmware ESP32 |
 | Chỉ thấy rule, không DRL | Xem log subscriber; kiểm tra khung giờ policy |
-| Train chậm / hết RAM | Dùng `train_hanoi.ipynb` trên Colab GPU |
+| Train chậm / hết RAM | Dùng `paper_reference/train.ipynb` trên Colab GPU |
 
 ---
 
@@ -244,6 +240,7 @@ DB mặc định: `iotdb` / `admin` / `admin123` — đổi trước khi product
 - Train/sim: [`paper_reference/README.md`](paper_reference/README.md)
 - PCB: [`docs/hardware_design_guide.md`](docs/hardware_design_guide.md)
 - Benchmark: [`scripts/replicate_and_compare.py`](scripts/replicate_and_compare.py)
+- Tóm tắt file: [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md)
 
 ---
 

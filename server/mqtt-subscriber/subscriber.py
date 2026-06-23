@@ -183,7 +183,7 @@ class ZoneManager:
         if self.actor_weights is None:
             return None
         
-        # State normalization — Hà Nội (train_hanoi.py bounds)
+        # State normalization — Hà Nội (train.py bounds)
         state_min = np.array([0, 18, 0.006, 0, 390, 0, 22, 0.008, 400, 0], dtype=np.float32)
         state_max = np.array([24, 42, 0.026, 900, 520, 80, 36, 0.024, 2000, 50], dtype=np.float32)
         norm_state = (np.array(state) - state_min) / (state_max - state_min + 1e-8)
