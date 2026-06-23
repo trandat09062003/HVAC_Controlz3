@@ -59,12 +59,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields
           <div className="flex items-center gap-2 mt-1">
             <div className={cn("w-1.5 h-1.5 rounded-full", state.power ? "bg-emerald-500 animate-pulse animate-glow-emerald" : "bg-slate-500")} />
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              {isPending ? 'Đang đồng bộ...' : state.power ? 'Hệ thống Sẵn sàng' : 'Chế độ Chờ'}
+              {isPending ? 'Đang đồng bộ...' : state.power ? 'Hệ thống Sẵn sàng' : 'Toàn hệ thống TẮT'}
             </span>
           </div>
         </div>
         <button
           onClick={togglePower}
+          title={state.power ? 'Tắt toàn bộ hệ thống' : 'Bật hệ thống'}
           className={cn(
             "p-3 rounded-xl transition-all duration-300 ring-4 cursor-pointer",
             state.power 
@@ -221,7 +222,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields
                   {[
                     { id: 'cool', icon: Snowflake, label: 'Làm lạnh', activeClass: 'text-blue-400 bg-blue-500/10 border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.1)]' },
                     { id: 'heat', icon: Sun, label: 'Làm nóng', activeClass: 'text-orange-400 bg-orange-500/10 border-orange-500/30 shadow-[0_0_15px_rgba(249,115,22,0.1)]' },
-                    { id: 'off', icon: Power, label: 'Tắt HVAC', activeClass: 'text-slate-400 bg-slate-500/10 border-slate-500/30' },
+                    { id: 'off', icon: Power, label: 'Tắt điều hòa', activeClass: 'text-slate-400 bg-slate-500/10 border-slate-500/30' },
                   ].map((m) => {
                     const isActive = state.mode === m.id;
                     return (

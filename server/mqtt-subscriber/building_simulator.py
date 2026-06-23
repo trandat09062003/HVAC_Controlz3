@@ -140,11 +140,11 @@ class BuildingSimulator:
             f_sa = 0.1
         p_air = 1.0 if a[3] > 0.5 else 0.0
         physical = {
-            "T_chws": round(t_chws, 2),
-            "D_oa": round(d_oa, 3),
-            "f_sa": round(f_sa, 3),
-            "P_air": p_air,
-            "target_temp": round(22.0 + (t_chws - 5.0) / 2.0, 1),
+            "T_chws": float(round(t_chws, 2)),
+            "D_oa": float(round(d_oa, 3)),
+            "f_sa": float(round(f_sa, 3)),
+            "P_air": float(p_air),
+            "target_temp": float(round(22.0 + (t_chws - 5.0) / 2.0, 1)),
         }
         self.last_drl_action = [float(x) for x in action]
         self.last_drl_action_physical = physical
@@ -207,10 +207,25 @@ class BuildingSimulator:
         v_sa, v_oa, _ = self.calc_airflow(f_sa, d_oa)
         t_oa = outdoor_temp if outdoor_temp is not None else temperature + 3.0
         t_sa = 12.5
-        q_hvac = max(0.0, 1005 * 1.2 * v_sa * max(0.0, temperature - t_sa))
-        cop = float(cfg.get("cop", PAPER["COP"]))
-        chiller_kw = q_hvac / cop / 1000
-        pump_kw = chiller_kw * cfg["devices"].get("pump", {}).get("ratio_of_chiller", 0.05)
+        target_temp = float(drl_physical.get("target_temp", 24.0)) if drl_physical else 24.0
+        operation_mode = str(drl_physical.get("operation_mode", "auto")) if drl_physical else "auto"
+
+        if operation_mode == "heat":
+            need_cooling = False
+        elif operation_mode == "off":
+            need_cooling = False
+        else:
+            need_cooling = temperature > target_temp - 0.3
+
+        if need_cooling:
+            q_hvac = max(0.0, 1005 * 1.2 * v_sa * max(0.0, temperature - t_sa))
+            cop = float(cfg.get("cop", PAPER["COP"]))
+            chiller_kw = q_hvac / cop / 1000
+            pump_kw = chiller_kw * cfg["devices"].get("pump", {}).get("ratio_of_chiller", 0.05)
+        else:
+            cop = float(cfg.get("cop", PAPER["COP"]))
+            chiller_kw = 0.0
+            pump_kw = 0.0
         fan_kw = self.calc_fan_power_kw(f_sa)
 
         devices = cfg["devices"]
@@ -229,7 +244,12 @@ class BuildingSimulator:
             }
 
         add_device("sensor_node", devices["sensor_node"]["power_w"])
-        add_device("chiller", chiller_kw * 1000, f"T_chws={t_chws:.1f}°C, COP={cop}")
+        add_device("chiller", chiller_kw * 1000, (
+            f"T_chws={t_chws:.1f}°C, COP={cop}" if need_cooling
+            else "Tắt — điều hòa OFF" if operation_mode == "off"
+            else "Tắt — chế độ làm nóng" if operation_mode == "heat"
+            else "Tắt — không cần làm mát"
+        ))
         add_device("pump", pump_kw * 1000)
         add_device("supply_fan", fan_kw * 1000, f"f_sa={f_sa:.0%}")
         add_device("purifier", devices["purifier"]["power_w"] if purifier_on else 0.0)
@@ -260,6 +280,15 @@ class BuildingSimulator:
             "reward": round(reward, 4),
             "comfort": comfort,
             "baseline_mode": baseline,
+            "target_temp": target_temp,
+            "hvac_demand": (
+                "heat" if operation_mode == "heat" and temperature < target_temp - 0.3
+                else "hold" if operation_mode in ("heat", "off")
+                else "cool" if need_cooling
+                else "heat" if temperature < target_temp - 0.3
+                else "hold"
+            ),
+            "operation_mode": operation_mode,
             "paper_ref": "Guo et al., Applied Energy 2025, DOI:10.1016/j.apenergy.2024.124467",
         }
         self.last_sim_snapshot = snapshot

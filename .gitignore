@@ -28,3 +28,6 @@ paper_reference/miniconda3/
 # Generated at runtime
 server/mqtt-subscriber/actor_weights.npz
 server/mqtt-subscriber/power_config.json
+
+# Script deploy VPS (chứa thông tin đăng nhập server — không đưa lên git)
+scripts/vps_*.py

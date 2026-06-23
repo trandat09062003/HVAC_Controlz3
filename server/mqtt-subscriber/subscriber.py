@@ -10,6 +10,7 @@ from threading import Thread
 from urllib.parse import urlparse
 
 from building_simulator import building_sim
+from twin_engine import twin_engine
 
 # Config
 MQTT_BROKER = os.getenv('MQTT_BROKER', 'mosquitto')
@@ -88,15 +89,29 @@ def is_outdoor_device(device_id):
 
 def to_float(value):
     try:
-        return None if value is None else float(value)
+        if value is None:
+            return None
+        if isinstance(value, (np.floating, np.integer)):
+            return float(value.item())
+        return float(value)
     except (TypeError, ValueError):
         return None
 
 def to_int(value):
     try:
-        return None if value is None else int(value)
+        if value is None:
+            return None
+        if isinstance(value, (np.floating, np.integer)):
+            return int(value.item())
+        return int(value)
     except (TypeError, ValueError):
         return None
+
+class NpJsonEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        return super().default(obj)
 
 def get_outdoor_temperature(payload):
     for key in ['outdoor_temperature', 'outdoorTemp', 'outside_temperature', 'outsideTemp']:
@@ -130,10 +145,10 @@ def calculate_simulated_power(payload, latest_control, drl_physical=None):
     fan_w = ai_dev.get("supply_fan", {}).get("power_w", 0)
 
     return {
-        'power_w': ai_snap['total_power_w'],
-        'power_ac_w': chiller_w,
-        'power_fan_w': fan_w,
-        'power_base_w': base_snap['total_power_w'],
+        'power_w': to_float(ai_snap['total_power_w']),
+        'power_ac_w': to_float(chiller_w),
+        'power_fan_w': to_float(fan_w),
+        'power_base_w': to_float(base_snap['total_power_w']),
         'device_breakdown': ai_snap['devices'],
         'baseline_breakdown': base_snap['devices'],
         'sim_snapshot': ai_snap,
@@ -518,12 +533,6 @@ def fetch_telemetry():
     override_active = time.time() < zone_manager.override_until
     remaining_override = int(zone_manager.override_until - time.time()) if override_active else 0
 
-    power_config = building_sim.get_config()
-    if building_sim.last_sim_snapshot:
-        for key, dev in building_sim.last_sim_snapshot.get('devices', {}).items():
-            if key in power_config.get('devices', {}):
-                power_config['devices'][key]['power_w'] = dev.get('power_w', 0)
-
     return {
         'latest': latest,
         'history': history[-20:],
@@ -536,9 +545,6 @@ def fetch_telemetry():
             'aiRecommendation': zone_manager.last_recommendation
         },
         'building': building_sim.get_building_status(is_online),
-        'buildingSim': building_sim.last_sim_snapshot,
-        'drlPanel': building_sim.get_drl_panel(),
-        'powerConfig': power_config,
     }
 
 
@@ -594,6 +600,20 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
             return
 
+        if parsed.path == '/api/twin':
+            try:
+                body = json.dumps(twin_engine.get_snapshot(), cls=NpJsonEncoder).encode('utf-8')
+                self.send_response(200)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(500)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            return
+
         if parsed.path != '/api/telemetry':
             self.send_response(404)
             self.send_common_headers()
@@ -602,7 +622,7 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            body = json.dumps(fetch_telemetry()).encode('utf-8')
+            body = json.dumps(fetch_telemetry(), cls=NpJsonEncoder).encode('utf-8')
             self.send_response(200)
             self.send_common_headers()
             self.end_headers()
@@ -622,6 +642,39 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
                 payload = json.loads(raw_body or '{}')
                 saved = building_sim.save_config(payload)
                 body = json.dumps({'ok': True, 'config': saved}).encode('utf-8')
+                self.send_response(200)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                self.send_response(400)
+                self.send_common_headers()
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': str(e)}).encode('utf-8'))
+            return
+
+        if parsed.path == '/api/twin':
+            try:
+                content_length = int(self.headers.get('Content-Length', '0'))
+                raw_body = self.rfile.read(content_length).decode('utf-8')
+                payload = json.loads(raw_body or '{}')
+                action = payload.get('action', 'reset')
+
+                if action == 'reset':
+                    twin_engine.reset()
+                elif action == 'step':
+                    twin_engine.step_once()
+                elif action == 'pause':
+                    twin_engine.set_paused(True)
+                elif action == 'play':
+                    twin_engine.set_paused(False)
+                elif action == 'set_month':
+                    month = int(payload.get('month', twin_engine.month))
+                    twin_engine.set_month(month)
+                else:
+                    raise ValueError(f'Unknown twin action: {action}')
+
+                body = json.dumps({'ok': True, 'twin': twin_engine.get_snapshot()}, cls=NpJsonEncoder).encode('utf-8')
                 self.send_response(200)
                 self.send_common_headers()
                 self.end_headers()
@@ -677,6 +730,9 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
 
             saved_command = save_remote_control_state(command)
 
+            if command['clientId'] != "ai-zone-manager":
+                twin_engine.set_manual_override(command)
+
             body = json.dumps({
                 'ok': True,
                 'topic': CONTROL_TOPIC,
@@ -723,42 +779,6 @@ def on_message(client, userdata, msg):
         humidity = to_float(payload.get('humidity'))
         outdoor_temp = get_outdoor_temperature(payload)
 
-        # 1. Get latest control state for power calculations
-        cur.execute("""
-            SELECT power, temp, operation_mode, fan_power, co2_max, humidity_max
-            FROM remote_control_state
-            ORDER BY time DESC
-            LIMIT 1
-        """)
-        c_row = cur.fetchone()
-        latest_control = None
-        if c_row:
-            latest_control = {
-                'power': c_row[0],
-                'temp': c_row[1],
-                'operationMode': c_row[2],
-                'fanPower': c_row[3],
-                'co2Max': c_row[4],
-                'humidityMax': c_row[5],
-            }
-
-        # 2. Get previous energy reading and timestamp
-        cur.execute("""
-            SELECT time, energy_kwh, energy_base_kwh FROM sensor_data
-            ORDER BY time DESC
-            LIMIT 1
-        """)
-        prev_row = cur.fetchone()
-        
-        prev_time = None
-        prev_energy = 0.0
-        prev_energy_base = 0.0
-        if prev_row:
-            prev_time = prev_row[0]
-            prev_energy = prev_row[1] if prev_row[1] is not None else 0.0
-            prev_energy_base = prev_row[2] if len(prev_row) > 2 and prev_row[2] is not None else 0.0
-
-        # 3. Build DRL state & run AI control before power simulation
         dust_val = to_float(payload.get('dust')) or 10.0
         if temp is not None and humidity is not None and co2 is not None:
             building_sim.build_state_vector(temp, humidity, co2, dust_val, outdoor_temp)
@@ -766,43 +786,9 @@ def on_message(client, userdata, msg):
         if device_id != 'unknown':
             zone_manager.evaluate_and_control(device_id, temp, co2, humidity, outdoor_temp, dust_val)
 
-        drl_physical = building_sim.last_drl_action_physical
-        sim_data = calculate_simulated_power(payload, latest_control, drl_physical)
-        power_w = sim_data['power_w']
-        power_ac_w = sim_data['power_ac_w']
-        power_fan_w = sim_data['power_fan_w']
-        power_base_w = sim_data['power_base_w']
-
-        # 4. Calculate energy consumption accumulation
-        import datetime
-        now = datetime.datetime.now(datetime.timezone.utc)
-        energy_kwh = prev_energy
-        energy_base_kwh = prev_energy_base
-        
-        if prev_time:
-            if prev_time.tzinfo is None:
-                prev_time = prev_time.replace(tzinfo=datetime.timezone.utc)
-            delta_sec = (now - prev_time).total_seconds()
-            if 0 < delta_sec < 3600:
-                delta_energy = (power_w * delta_sec) / 3600000.0
-                energy_kwh = prev_energy + delta_energy
-                
-                delta_energy_base = (power_base_w * delta_sec) / 3600000.0
-                energy_base_kwh = prev_energy_base + delta_energy_base
-            else:
-                delta_energy = (power_w * 5.0) / 3600000.0
-                energy_kwh = prev_energy + delta_energy
-                
-                delta_energy_base = (power_base_w * 5.0) / 3600000.0
-                energy_base_kwh = prev_energy_base + delta_energy_base
-        else:
-            energy_kwh = 0.0
-            energy_base_kwh = 0.0
-
-        # 5. Insert new sensor data with simulated power and energy
         cur.execute("""
-            INSERT INTO sensor_data (time, device_id, temperature, outdoor_temperature, humidity, co2, dust, power_w, energy_kwh, power_base_w, energy_base_kwh, power_ac_w, power_fan_w, valve_angle)
-            VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO sensor_data (time, device_id, temperature, outdoor_temperature, humidity, co2, dust)
+            VALUES (NOW(), %s, %s, %s, %s, %s, %s)
         """, (
             device_id,
             temp,
@@ -810,17 +796,10 @@ def on_message(client, userdata, msg):
             humidity,
             co2,
             to_float(payload.get('dust')),
-            power_w,
-            energy_kwh,
-            power_base_w,
-            energy_base_kwh,
-            power_ac_w,
-            power_fan_w,
-            to_int(payload.get('valve_angle'))
         ))
         conn.commit()
-        
-        print(f"✅ Saved → Device: {device_id} | Temp: {temp} | CO2: {co2} | Power: {power_w:.1f}W | Energy: {energy_kwh:.4f}kWh | BaseEnergy: {energy_base_kwh:.4f}kWh")
+
+        print(f"✅ Saved → Device: {device_id} | Temp: {temp} | CO2: {co2} | RH: {humidity}%")
         
     except Exception as e:
         print(f"❌ Error processing message: {e} | Topic: {msg.topic}")

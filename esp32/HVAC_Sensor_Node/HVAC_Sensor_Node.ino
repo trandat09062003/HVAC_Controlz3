@@ -23,13 +23,13 @@
 // ⚙️ CẤU HÌNH HỆ THỐNG
 // =========================================================================
 
-// 1. Cấu hình kết nối WiFi
-#define WIFI_SSID        "TenMangWiFi"         // Tên mạng WiFi
-#define WIFI_PASSWORD    "MatKhauWiFi"         // Mật khẩu WiFi
+// 1. Cấu hình kết nối WiFi — điền thông tin mạng của bạn trước khi nạp firmware
+#define WIFI_SSID        "TenMangWiFi"
+#define WIFI_PASSWORD    "MatKhauWiFi"
 
 // 2. Cấu hình MQTT Broker
 // LOCAL:  "192.168.1.21"   — Docker trên máy tính (cùng WiFi)
-// VPS/local: IP máy chạy Docker (docker-compose.alt.yml → port 1885)
+// VPS:    IP server của bạn  — docker-compose.alt.yml, port 1885
 #define MQTT_SERVER      "192.168.1.100"
 #define MQTT_PORT        1885                  // Cổng MQTT host (docker-compose.alt.yml)
 #define MQTT_DEVICE_ID   "indoor-01"           // ID thiết bị

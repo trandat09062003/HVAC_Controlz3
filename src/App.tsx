@@ -19,13 +19,15 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import mainLogo from '../img/main_logo_2.png';
 import { MetricCard } from './components/MetricCard';
-import { RealTimeChart } from './components/RealTimeChart';
+import { SensorHistoryChart } from './components/SensorHistoryChart';
+import { TwinComparisonChart } from './components/TwinComparisonChart';
+import { TwinTestPanel } from './components/TwinTestPanel';
 import { ControlPanel } from './components/ControlPanel';
 import { BuildingVisualization } from './components/BuildingVisualization';
 import { DevicePowerPanel } from './components/DevicePowerPanel';
 import { DRLModelPanel } from './components/DRLModelPanel';
 import { EnergyBreakdownChart } from './components/EnergyBreakdownChart';
-import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo, DashboardTab, BuildingSimSnapshot, DRLPanel, PowerConfig, BuildingInfo } from './types';
+import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo, DashboardTab, BuildingSimSnapshot, DRLPanel, PowerConfig, BuildingInfo, TwinResponse } from './types';
 import { cn } from './lib/utils';
 
 // Helper to determine status based on thresholds
@@ -123,7 +125,6 @@ export default function App() {
   ]);
 
   const [history, setHistory] = useState<ChartDataPoint[]>([]);
-  const [latestValveAngle, setLatestValveAngle] = useState<number>(0);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [isDeviceOnline, setIsDeviceOnline] = useState(false);
   const [lastTelemetryTime, setLastTelemetryTime] = useState<string | null>(null);
@@ -146,16 +147,10 @@ export default function App() {
   const controlReadyRef = useRef(false);
   const lastControlRevisionRef = useRef<string | null>(null);
   const [zoneManager, setZoneManager] = useState<ZoneManagerInfo | null>(null);
-  const [latestPower, setLatestPower] = useState<number>(0);
-  const [latestEnergy, setLatestEnergy] = useState<number>(0);
-  const [latestPowerAc, setLatestPowerAc] = useState<number>(0);
-  const [latestPowerFan, setLatestPowerFan] = useState<number>(0);
-  const [latestPowerBase, setLatestPowerBase] = useState<number>(0);
-  const [latestEnergyBase, setLatestEnergyBase] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [buildingInfo, setBuildingInfo] = useState<BuildingInfo | null>(null);
-  const [buildingSim, setBuildingSim] = useState<BuildingSimSnapshot | null>(null);
-  const [drlPanel, setDrlPanel] = useState<DRLPanel | null>(null);
+  const [twin, setTwin] = useState<TwinResponse | null>(null);
+  const [twinBusy, setTwinBusy] = useState(false);
   const [powerConfig, setPowerConfig] = useState<PowerConfig | null>(null);
 
   useEffect(() => {
@@ -259,6 +254,11 @@ export default function App() {
       setHvacState(officialState);
       pendingControlRef.current = null;
       setPendingControl(null);
+      void fetch('/api/twin')
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data: TwinResponse | null) => {
+          if (data) setTwin(data);
+        });
     } catch {
       if (pendingControlRef.current?.commandId !== commandId) return;
 
@@ -297,20 +297,11 @@ export default function App() {
           setDeviceId(telemetry.latest.device_id ?? telemetry.controlState?.device_id ?? null);
           setIsDeviceOnline(telemetry.latest.is_online ?? false);
           setLastTelemetryTime(telemetry.latest.time ?? null);
-          setLatestPower(telemetry.latest.power ?? 0);
-          setLatestEnergy(telemetry.latest.energy ?? 0);
-          setLatestPowerAc(telemetry.latest.power_ac ?? 0);
-          setLatestPowerFan(telemetry.latest.power_fan ?? 0);
-          setLatestPowerBase(telemetry.latest.power_base ?? 0);
-          setLatestEnergyBase(telemetry.latest.energy_base ?? 0);
         }
         if (telemetry.zoneManager) {
           setZoneManager(telemetry.zoneManager);
         }
         if (telemetry.building) setBuildingInfo(telemetry.building);
-        if (telemetry.buildingSim) setBuildingSim(telemetry.buildingSim);
-        if (telemetry.drlPanel) setDrlPanel(telemetry.drlPanel);
-        if (telemetry.powerConfig) setPowerConfig(telemetry.powerConfig);
         if (telemetry.controlState) {
           const incomingState = remoteToHVACState(telemetry.controlState);
           const incomingRevision = getControlRevision(telemetry.controlState);
@@ -351,7 +342,6 @@ export default function App() {
           if (reading.id === 'pm25') return updateReading(reading, telemetry.latest.dust);
           return reading;
         }));
-        setLatestValveAngle(telemetry.latest.valve_angle ?? buildingSim?.airflow?.damper_pct ?? latestValveAngle);
       } catch (error) {
         console.error(error);
       }
@@ -362,6 +352,59 @@ export default function App() {
 
     return () => window.clearInterval(interval);
   }, [clientId, showToast]);
+
+  // Digital twin — synthetic Hanoi weather (separate from live sensors)
+  useEffect(() => {
+    if (activeTab === 'overview') return;
+
+    const fetchTwin = async () => {
+      try {
+        const response = await fetch('/api/twin');
+        if (!response.ok) throw new Error(`Twin request failed: ${response.status}`);
+        const data: TwinResponse = await response.json();
+        setTwin(data);
+        if (data.powerConfig) setPowerConfig(data.powerConfig);
+      } catch (error) {
+        console.error(error);
+      }
+    };
+
+    fetchTwin();
+    const interval = window.setInterval(fetchTwin, 3000);
+    return () => window.clearInterval(interval);
+  }, [activeTab]);
+
+  const twinAction = useCallback(async (action: 'reset' | 'step' | 'pause' | 'play' | 'set_month', month?: number) => {
+    setTwinBusy(true);
+    try {
+      const response = await fetch('/api/twin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, month }),
+      });
+      if (!response.ok) throw new Error('Twin action failed');
+      const data = await response.json();
+      setTwin(data.twin);
+      if (data.twin?.powerConfig) setPowerConfig(data.twin.powerConfig);
+      if (action === 'reset') showToast('info', 'Đã reset mô phỏng');
+    } catch {
+      showToast('error', 'Thao tác mô phỏng thất bại');
+    } finally {
+      setTwinBusy(false);
+    }
+  }, [showToast]);
+
+  const twinBuildingSim = twin?.buildingSim ?? null;
+  const twinBaselineSim = twin?.baselineSim ?? null;
+  const twinDrlPanel = twin?.drlPanel ?? null;
+  const twinBuilding = twin?.building ?? buildingInfo;
+
+  const pageTitle = useMemo(() => {
+    if (activeTab === 'overview') return 'Giám sát cảm biến Zone A';
+    if (activeTab === 'building') return 'Digital Twin — Mô phỏng';
+    if (activeTab === 'ai') return 'AI / DDPG — Mô phỏng';
+    return 'Điện năng — So sánh DDPG vs RBC';
+  }, [activeTab]);
 
   // --- WEATHER ---
   useEffect(() => {
@@ -474,11 +517,24 @@ export default function App() {
             {/* Header info */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-black tracking-tight text-white uppercase">Smart HVAC Digital Twin</h2>
+                <h2 className="text-xl font-black tracking-tight text-white uppercase">{pageTitle}</h2>
                 <p className="text-slate-500 text-xs mt-0.5">
-                  {buildingInfo?.zone_id ?? 'Zone A'} • {deviceId ?? 'Chưa kết nối'}
-                  {lastTelemetryTime && (
-                    <span className="ml-2">• {new Date(lastTelemetryTime).toLocaleString('vi-VN')}</span>
+                  {activeTab === 'overview' ? (
+                    <>
+                      {buildingInfo?.zone_id ?? 'Zone A'} • {deviceId ?? 'Chưa kết nối'}
+                      {lastTelemetryTime && (
+                        <span className="ml-2">• {new Date(lastTelemetryTime).toLocaleString('vi-VN')}</span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-violet-400/90">
+                      {twin?.label ?? 'Đang tải mô phỏng...'}
+                      {twin?.weather && (
+                        <span className="text-slate-500 ml-2">
+                          • Ngoài trời {twin.weather.outdoor_temp}°C • Bước {twin.sim_step}
+                        </span>
+                      )}
+                    </span>
                   )}
                 </p>
               </div>
@@ -501,7 +557,7 @@ export default function App() {
               </div>
             </div>
 
-            {!isDeviceOnline && (
+            {!isDeviceOnline && activeTab === 'overview' && (
               <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
                 <span>
@@ -513,234 +569,92 @@ export default function App() {
             {/* Tab: Overview */}
             {activeTab === 'overview' && (
               <>
-            {/* Metric Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               <MetricCard reading={readings[0]} icon={Thermometer} />
               <MetricCard reading={readings[1]} icon={Droplets} />
               <MetricCard reading={readings[2]} icon={Wind} />
               <MetricCard reading={readings[3]} icon={Activity} />
-              <MetricCard reading={{id: 'valve_angle', name: 'Van gió tươi', value: buildingSim?.airflow.damper_pct ?? latestValveAngle, unit: '%', status: 'good', trend: 0 }} icon={Wind} />
             </div>
 
-            <div className="grid grid-cols-1 gap-6">
-              <RealTimeChart data={history} />
+            <SensorHistoryChart data={history} />
+
+            <div className="glass-panel rounded-2xl p-5 border border-slate-800/85 shadow-xl">
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Trạng thái điều khiển AI</h4>
+              <div className="flex flex-wrap gap-3 items-center mb-3">
+                <span className="text-[8px] font-black uppercase text-slate-300 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-full">
+                  {zoneManager?.currentPolicy === 'working_hours' && '💼 Giờ làm việc'}
+                  {zoneManager?.currentPolicy === 'night_eco' && '🌙 Ngủ đêm ECO'}
+                  {zoneManager?.currentPolicy === 'eco_standby' && '🍃 Chờ tiết kiệm'}
+                  {zoneManager?.currentPolicy === 'manual' && '👤 Thủ công'}
+                  {!zoneManager && '—'}
+                </span>
+                <span className={cn(
+                  'text-[8px] font-black uppercase px-2 py-0.5 rounded-full border',
+                  isDeviceOnline ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-slate-800 text-slate-500 border-slate-700'
+                )}>
+                  ESP32 {isDeviceOnline ? 'Online' : 'Offline'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                {zoneManager?.aiRecommendation || 'Đang chờ dữ liệu cảm biến từ ESP32...'}
+              </p>
+              <p className="text-[9px] text-slate-600 mt-3 border-t border-slate-800 pt-3">
+                Tab <strong className="text-slate-500">Tòa nhà / AI / Điện năng</strong> dùng mô phỏng thời tiết Hà Nội (dữ liệu ảo) để test DDPG vs RBC — không trộn với cảm biến thật.
+              </p>
             </div>
               </>
             )}
 
             {/* Tab: Building */}
             {activeTab === 'building' && (
-              <div className="space-y-6">
+              <div className="space-y-4">
+                <TwinTestPanel twin={twin} onAction={twinAction} busy={twinBusy} />
                 <BuildingVisualization
-                  building={buildingInfo ?? undefined}
-                  sim={buildingSim}
-                  temperature={readings[0]?.value}
-                  isOnline={isDeviceOnline}
+                  building={twinBuilding ?? undefined}
+                  sim={twinBuildingSim}
+                  baselineSim={twinBaselineSim}
+                  drlPanel={twinDrlPanel ?? undefined}
+                  twin={twin}
+                  temperature={twinBuildingSim?.zone_temp}
+                  synthetic
+                  control={displayHvacState}
                 />
-                <EnergyBreakdownChart sim={buildingSim} />
+                <EnergyBreakdownChart sim={twinBuildingSim} baselineSim={twinBaselineSim} />
               </div>
             )}
 
-            {/* Tab: AI / DDPG */}
             {activeTab === 'ai' && (
-              <DRLModelPanel panel={drlPanel ?? undefined} policy={zoneManager?.currentPolicy} />
+              <DRLModelPanel panel={twinDrlPanel ?? undefined} policy={zoneManager?.currentPolicy} />
             )}
 
-            {/* Tab: Energy config */}
             {activeTab === 'energy' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <DevicePowerPanel
-                  config={powerConfig}
-                  totalPowerW={buildingSim?.total_power_w ?? latestPower}
-                  tariffVnd={powerConfig?.electricity_tariff_vnd ?? 2500}
-                  onSave={savePowerConfig}
-                />
-                <EnergyBreakdownChart sim={buildingSim} />
+              <div className="space-y-6">
+                <TwinComparisonChart data={twin?.history ?? []} savingsPct={twin?.savings_pct ?? 0} />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <DevicePowerPanel
+                    config={powerConfig}
+                    totalPowerW={twinBuildingSim?.total_power_w ?? 0}
+                    tariffVnd={powerConfig?.electricity_tariff_vnd ?? 2500}
+                    onSave={savePowerConfig}
+                  />
+                  <EnergyBreakdownChart sim={twinBuildingSim} baselineSim={twinBaselineSim} />
+                </div>
+                {twin && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {[
+                      { label: 'DDPG tích lũy', value: `${twin.energy_ai_kwh.toFixed(4)} kWh`, color: 'text-emerald-400' },
+                      { label: 'RBC tích lũy', value: `${twin.energy_base_kwh.toFixed(4)} kWh`, color: 'text-slate-400' },
+                      { label: 'Tiết kiệm', value: `${twin.savings_pct.toFixed(1)}%`, color: 'text-emerald-400' },
+                      { label: 'Nhiệt ngoài trời', value: `${twin.weather.outdoor_temp}°C`, color: 'text-sky-400' },
+                    ].map(item => (
+                      <div key={item.label} className="glass-panel rounded-xl p-3 border border-slate-800 text-center">
+                        <p className="text-[8px] text-slate-500 font-bold uppercase">{item.label}</p>
+                        <p className={cn('text-sm font-black font-mono mt-1', item.color)}>{item.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-
-            {/* Secondary Intel — overview tab */}
-            {activeTab === 'overview' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-               <div className="glass-panel rounded-2xl p-5 border border-slate-800/85 shadow-xl flex flex-col justify-between min-h-[250px]">
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Hiệu năng Tối ưu AI</h4>
-                      <span className="flex items-center gap-1 text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse animate-glow-emerald" />
-                        AI COORD ACTIVE
-                      </span>
-                    </div>
-
-                    <div className="space-y-3.5">
-                      {/* Big Savings Metric */}
-                      <div className="flex items-center gap-4 bg-emerald-500/5 p-3.5 rounded-xl border border-emerald-500/10">
-                        <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-400 font-extrabold text-lg">
-                          🍃
-                        </div>
-                        <div>
-                          <p className="text-[9px] text-emerald-400 font-black uppercase tracking-wider">AI tiết kiệm điện năng</p>
-                          <p className="text-2xl font-black font-mono text-emerald-400 leading-none mt-1">
-                            {latestEnergyBase > latestEnergy 
-                              ? (((latestEnergyBase - latestEnergy) / latestEnergyBase) * 100).toFixed(1)
-                              : '0.0'}%
-                          </p>
-                          <p className="text-[9px] text-slate-500 font-bold mt-1">
-                            Lượng điện giảm: {Math.max(0, latestEnergyBase - latestEnergy).toFixed(3)} kWh
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Savings Breakdown */}
-                      <div className="grid grid-cols-2 gap-3 text-xs font-semibold pt-1">
-                        <div className="border-r border-slate-800 pr-2">
-                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Chi phí đã giảm</p>
-                          <p className="text-sm font-extrabold text-emerald-400 mt-0.5">
-                            - {Math.max(0, (latestEnergyBase - latestEnergy) * 2500).toLocaleString('vi-VN', { maximumFractionDigits: 0 })} VNĐ
-                          </p>
-                        </div>
-                        <div className="pl-2">
-                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Giảm phát thải CO2</p>
-                          <p className="text-sm font-extrabold text-slate-300 mt-0.5">
-                            - {Math.max(0, (latestEnergyBase - latestEnergy) * 0.5).toFixed(3)} kg
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Current active policy */}
-                      <div className="flex justify-between items-center border-t border-slate-800/80 pt-2.5 text-xs">
-                        <span className="text-slate-400 font-semibold text-[10px]">Chế độ vận hành của AI</span>
-                        <span className="text-[8px] font-black uppercase text-slate-300 bg-slate-900 border border-slate-800 px-2.5 py-0.5 rounded-full">
-                          {zoneManager?.currentPolicy === 'working_hours' && '💼 Giờ làm việc'}
-                          {zoneManager?.currentPolicy === 'night_eco' && '🌙 Ngủ đêm ECO'}
-                          {zoneManager?.currentPolicy === 'eco_standby' && '🍃 Chờ tiết kiệm'}
-                          {zoneManager?.currentPolicy === 'manual' && '👤 Thủ công'}
-                        </span>
-                      </div>
-
-                      {/* AI recommendation */}
-                      <div className="p-2.5 rounded-xl bg-slate-950/40 border border-slate-900 text-[10px] text-slate-400 leading-relaxed font-semibold">
-                        <span className="font-black text-slate-500 block mb-0.5 uppercase text-[8px] tracking-wider">AI Khuyến cáo:</span>
-                        {zoneManager?.aiRecommendation || 'Đang phân tích hoạt động phòng...'}
-                      </div>
-                    </div>
-                  </div>
-               </div>
-
-               <div className="glass-panel rounded-2xl p-5 border border-slate-800/85 shadow-xl flex flex-col justify-between min-h-[280px]">
-                  <div className="space-y-4">
-                    <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center justify-between">
-                      <span>Điện năng tiêu thụ (Mô phỏng)</span>
-                      <span className="flex items-center gap-1 text-[8px] font-black px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                        <span className="w-1 h-1 rounded-full bg-blue-500 animate-pulse animate-glow-blue" />
-                        Đang giám sát
-                      </span>
-                    </h4>
-                    
-                    {/* Real-time Load & Consumption */}
-                    <div className="grid grid-cols-2 gap-4 bg-slate-950/50 p-3.5 rounded-xl border border-slate-900">
-                      <div>
-                        <p className="text-[8px] text-slate-500 uppercase font-bold tracking-wider">Tổng tiêu thụ (AI)</p>
-                        <p className="text-xl font-extrabold font-mono text-slate-100 tracking-tight leading-none mt-1">
-                          {latestEnergy.toFixed(3)}
-                          <span className="text-xs text-slate-500 ml-1 font-bold">kWh</span>
-                        </p>
-                        <p className="text-[8px] text-slate-500 font-bold tracking-tighter leading-none mt-1">
-                          Tạm tính: {(latestEnergy * 2500).toLocaleString('vi-VN', { maximumFractionDigits: 0 })} VNĐ
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-[8px] text-slate-500 uppercase font-bold tracking-wider">Công suất tức thì</p>
-                        <p className="text-xl font-extrabold font-mono text-blue-400 tracking-tight leading-none mt-1">
-                          {latestPower >= 1000 ? (latestPower / 1000).toFixed(2) : latestPower.toFixed(0)}
-                          <span className="text-xs text-slate-500 ml-1 font-bold">{latestPower >= 1000 ? 'kW' : 'W'}</span>
-                        </p>
-                        <span className={cn(
-                          "inline-flex items-center gap-0.5 text-[8px] font-black px-1.5 py-0.5 rounded-full mt-1.5 border",
-                          latestPower < 50 
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                            : latestPower < 500
-                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                            : 'bg-orange-500/10 text-orange-400 border-orange-500/20'
-                        )}>
-                          {latestPower < 50 ? 'Chờ/Tiết kiệm' : latestPower < 500 ? 'Tải Trung bình' : 'Tải Cao'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Breakdown section */}
-                    <div className="space-y-1.5">
-                      <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider block">Phân rã công suất mô phỏng</span>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="bg-slate-950/30 border border-slate-900 rounded-lg p-2 text-center">
-                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Điều hòa (AC)</p>
-                          <p className="text-xs font-black font-mono text-slate-300 mt-0.5">{latestPowerAc.toFixed(0)} W</p>
-                        </div>
-                        <div className="bg-slate-950/30 border border-slate-900 rounded-lg p-2 text-center">
-                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Quạt gió (Fan)</p>
-                          <p className="text-xs font-black font-mono text-slate-300 mt-0.5">{latestPowerFan.toFixed(0)} W</p>
-                        </div>
-                        <div className="bg-slate-950/30 border border-slate-900 rounded-lg p-2 text-center">
-                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-wider font-semibold">Hệ thống (Stby)</p>
-                          <p className="text-xs font-black font-mono text-slate-300 mt-0.5">5 W</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Baseline Comparison section */}
-                    <div className="border-t border-slate-800/80 pt-3 space-y-2">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">So sánh hiệu quả với Baseline</span>
-                        {latestEnergyBase > 0 && latestEnergyBase > latestEnergy ? (
-                          <span className="inline-flex items-center gap-0.5 text-[8px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                            🍃 AI tiết kiệm: {(((latestEnergyBase - latestEnergy) / latestEnergyBase) * 100).toFixed(1)}%
-                          </span>
-                        ) : (
-                          <span className="text-[8px] text-slate-500 font-bold italic">Đang phân tích...</span>
-                        )}
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-4 text-xs font-semibold">
-                        <div className="border-r border-slate-800 pr-2">
-                          <p className="text-[8px] text-emerald-400 font-bold uppercase tracking-wider">Hệ thống AI Tối ưu</p>
-                          <p className="text-xs font-black font-mono text-slate-200 mt-0.5">{latestEnergy.toFixed(3)} kWh</p>
-                          <p className="text-[8px] text-slate-500 font-bold">~{(latestEnergy * 2500).toLocaleString('vi-VN', { maximumFractionDigits: 0 })} VNĐ</p>
-                        </div>
-                        <div className="pl-2">
-                          <p className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Baseline (Không tối ưu)</p>
-                          <p className="text-xs font-black font-mono text-slate-400 mt-0.5">{latestEnergyBase.toFixed(3)} kWh</p>
-                          <p className="text-[8px] text-slate-500 font-bold">~{(latestEnergyBase * 2500).toLocaleString('vi-VN', { maximumFractionDigits: 0 })} VNĐ</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  {/* Sparkline chart at the very bottom */}
-                  <div className="flex items-center justify-between pt-3 border-t border-slate-800/80 mt-3">
-                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Biểu đồ tải (7 điểm gần nhất)</span>
-                    <div className="w-32 h-8 flex items-end gap-0.5">
-                      {(() => {
-                        const lastPowerPoints = history.slice(-7);
-                        const maxPower = Math.max(...lastPowerPoints.map(p => p.power ?? 0), 100);
-                        return lastPowerPoints.map((pt, i) => {
-                          const power = pt.power ?? 0;
-                          const heightPercent = maxPower > 0 ? (power / maxPower) * 100 : 10;
-                          return (
-                            <div 
-                              key={i} 
-                              className={`flex-1 rounded-t-sm transition-all duration-500 ${
-                                power < 50 ? 'bg-emerald-500/50' : power < 500 ? 'bg-blue-500/60' : 'bg-blue-400'
-                              }`}
-                              style={{ height: `${Math.max(10, heightPercent)}%` }}
-                              title={`AI: ${power.toFixed(0)}W | Baseline: ${(pt.power_base ?? 0).toFixed(0)}W`}
-                            />
-                          );
-                        });
-                      })()}
-                    </div>
-                  </div>
-               </div>
-            </div>
             )}
           </div>
 

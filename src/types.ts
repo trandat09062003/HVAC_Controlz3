@@ -54,6 +54,53 @@ export interface BuildingSimSnapshot {
   comfort: { temp_ok: boolean; rh_ok: boolean; co2_ok: boolean; pm_ok: boolean };
   baseline_mode: boolean;
   paper_ref: string;
+  zone_temp?: number;
+  zone_humidity?: number;
+  zone_co2?: number;
+  zone_pm?: number;
+  target_temp?: number;
+  hvac_demand?: 'cool' | 'heat' | 'hold';
+  manual_control?: boolean;
+}
+
+export interface TwinHistoryPoint {
+  time: string;
+  step: number;
+  outdoor_temp: number;
+  outdoor_humidity: number;
+  solar: number;
+  energy_ai: number;
+  energy_base: number;
+  power_ai: number;
+  power_base: number;
+  zone_temp_ai: number;
+  zone_temp_base: number;
+}
+
+export interface TwinResponse {
+  mode: 'synthetic';
+  label: string;
+  month: number;
+  sim_step: number;
+  sim_hour: number;
+  weather: {
+    outdoor_temp: number;
+    outdoor_humidity: number;
+    solar_wm2: number;
+    pm25_outdoor: number;
+  };
+  buildingSim?: BuildingSimSnapshot | null;
+  baselineSim?: BuildingSimSnapshot | null;
+  drlPanel?: DRLPanel;
+  energy_ai_kwh: number;
+  energy_base_kwh: number;
+  savings_pct: number;
+  history: TwinHistoryPoint[];
+  building?: BuildingInfo;
+  powerConfig?: PowerConfig;
+  paused?: boolean;
+  step_interval_s?: number;
+  manual_control?: boolean;
 }
 
 export interface DRLStateEntry {
@@ -103,21 +150,11 @@ export interface TelemetryResponse {
     co2: number | null;
     dust: number | null;
     time: string | null;
-    power: number | null;
-    energy: number | null;
-    power_base: number | null;
-    energy_base: number | null;
-    power_ac: number | null;
-    power_fan: number | null;
-    valve_angle?: number | null;
   };
   history: ChartDataPoint[];
   controlState: RemoteControlState | null;
   zoneManager: ZoneManagerInfo;
   building?: BuildingInfo;
-  buildingSim?: BuildingSimSnapshot | null;
-  drlPanel?: DRLPanel;
-  powerConfig?: PowerConfig;
 }
 
 export interface HVACState {
