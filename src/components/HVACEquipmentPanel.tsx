@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Snowflake, Fan, Wind, AirVent, Power, ArrowRight, Flame } from 'lucide-react';
+import { Snowflake, Fan, Wind, AirVent, Power, Flame } from 'lucide-react';
 import { BuildingSimSnapshot, DRLPanel, HVACState } from '../types';
 import { cn } from '../lib/utils';
 
@@ -92,7 +92,7 @@ export function deriveHvacState(
   let fanW = sim?.devices?.supply_fan?.power_w ?? 0;
   const pumpW = sim?.devices?.pump?.power_w ?? 0;
 
-  let fanOn = fSa > 0.15 || fanW > 30;
+  let fanOn = fSa >= 0.08 || fanW > 5 || (sim?.airflow?.V_sa ?? 0) > 0.05;
   let chillerOn = hvacDemand === 'cool' && chillerW > 10;
   let needHeat = hvacDemand === 'heat';
   let damperPct = sim?.airflow?.damper_pct ?? dOa * 100;
@@ -150,7 +150,7 @@ export function deriveHvacState(
         } else {
           const fanMap: Record<string, number> = { on: 0.4, low: 0.22, medium: 0.5, high: 0.8 };
           fSa = fanMap[control.fanSpeed] ?? fSa;
-          fanOn = fSa > 0.15;
+          fanOn = fSa >= 0.08;
           if (control.fanSpeed === 'high') {
             dOa = Math.max(dOa, 0.45);
             damperPct = Math.max(damperPct, 45);
@@ -170,7 +170,7 @@ export function deriveHvacState(
       } else {
         const fanMap: Record<string, number> = { on: 0.4, low: 0.22, medium: 0.5, high: 0.8 };
         fSa = fanMap[control.fanSpeed] ?? fSa;
-        fanOn = fSa > 0.15;
+        fanOn = fSa >= 0.08;
         if (control.fanSpeed === 'high') {
           dOa = Math.max(dOa, 0.45);
           damperPct = Math.max(damperPct, 45);
@@ -229,37 +229,9 @@ export const HVACEquipmentPanel: React.FC<HVACEquipmentPanelProps> = ({ sim, drl
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">
-          {hvac.manualControl ? 'Thiết bị HVAC — Điều khiển thủ công' : 'Thiết bị HVAC — DDPG điều khiển'}
-        </p>
-        <div className="flex gap-2 text-[8px] font-bold">
-          {hvac.manualControl && (
-            <span className="px-2 py-0.5 rounded-full bg-amber-950 border border-amber-700 text-amber-400">
-              Panel phải
-            </span>
-          )}
-          <span className="px-2 py-0.5 rounded-full bg-sky-950 border border-sky-800 text-sky-400">
-            Setpoint DDPG: {hvac.targetTemp}°C
-          </span>
-          <span className="px-2 py-0.5 rounded-full bg-slate-900 border border-slate-700 text-slate-400">
-            Thoải mái: {hvac.comfortRange}
-          </span>
-        </div>
-      </div>
-
-      {/* Flow diagram */}
-      <div className="flex flex-wrap items-center justify-center gap-1 py-2 px-2 rounded-xl bg-slate-950/50 border border-slate-800 text-[7px] font-bold uppercase text-slate-500">
-        <span className="text-sky-400">Ngoài trời</span>
-        <ArrowRight className="w-3 h-3 text-slate-600" />
-        <span className={cn(hvac.damperOpen ? 'text-cyan-400' : 'text-slate-600')}>Van {hvac.damperPct.toFixed(0)}%</span>
-        <ArrowRight className="w-3 h-3 text-slate-600" />
-        <span className={cn(hvac.fanOn ? 'text-blue-400' : 'text-slate-600')}>Quạt {hvac.fanOn ? 'ON' : 'OFF'}</span>
-        <ArrowRight className="w-3 h-3 text-slate-600" />
-        <span className={cn(hvac.chillerOn ? 'text-indigo-400' : 'text-slate-600')}>Chiller {hvac.chillerOn ? 'ON' : 'OFF'}</span>
-        <ArrowRight className="w-3 h-3 text-slate-600" />
-        <span className="text-emerald-400">Phòng Zone A</span>
-      </div>
+      <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest">
+        Thiết bị HVAC
+      </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <EquipmentCard
@@ -272,10 +244,10 @@ export const HVACEquipmentPanel: React.FC<HVACEquipmentPanelProps> = ({ sim, drl
           icon={hvac.needHeat || hvac.acMode.includes('nóng') ? Flame : Snowflake}
           on={hvac.chillerOn}
           mode={hvac.acMode}
-          value={hvac.chillerOn ? `${hvac.tChws.toFixed(1)}°C` : 'TẮT'}
+          value={hvac.chillerOn ? `Nước lạnh ${hvac.tChws.toFixed(1)}°C` : 'TẮT'}
           detail={hvac.chillerOn
-            ? `Nước lạnh T_chws • ${hvac.chillerW.toFixed(0)} W + bơm ${hvac.pumpW.toFixed(0)} W`
-            : `Mục tiêu ${hvac.targetTemp}°C • phòng ${hvac.zoneTemp?.toFixed(1) ?? '—'}°C`}
+            ? `${hvac.chillerW.toFixed(0)} W + bơm ${hvac.pumpW.toFixed(0)} W`
+            : `Phòng ${hvac.zoneTemp?.toFixed(1) ?? '—'}°C • mục tiêu ${hvac.targetTemp}°C`}
           colorOn="bg-indigo-600/25 border-indigo-500/40"
           colorOff="bg-slate-900/80 border-slate-800"
         />
@@ -286,7 +258,7 @@ export const HVACEquipmentPanel: React.FC<HVACEquipmentPanelProps> = ({ sim, drl
           on={hvac.fanOn}
           mode={hvac.fanMode}
           value={`${(hvac.fSa * 100).toFixed(0)}%`}
-          detail={`f_sa • ${hvac.vSa.toFixed(2)} m³/s • ${hvac.fanW.toFixed(0)} W`}
+          detail={`${hvac.fanW.toFixed(0)} W`}
           colorOn="bg-blue-600/25 border-blue-500/40"
           colorOff="bg-slate-900/80 border-slate-800"
         />
@@ -297,7 +269,7 @@ export const HVACEquipmentPanel: React.FC<HVACEquipmentPanelProps> = ({ sim, drl
           on={hvac.damperOpen}
           mode={hvac.damperPct >= 50 ? 'Mở rộng' : hvac.damperPct >= 20 ? 'Mở vừa' : 'Hé mở'}
           value={`${hvac.damperPct.toFixed(0)}%`}
-          detail={`D_oa ${(hvac.dOa * 100).toFixed(0)}% • V_oa ${hvac.vOa.toFixed(2)} m³/s`}
+          detail={`${hvac.vOa.toFixed(2)} m³/s`}
           colorOn="bg-cyan-600/20 border-cyan-500/35"
           colorOff="bg-slate-900/80 border-slate-800"
         />
@@ -308,47 +280,10 @@ export const HVACEquipmentPanel: React.FC<HVACEquipmentPanelProps> = ({ sim, drl
           on={hvac.purifierOn}
           mode={hvac.purifierOn ? 'Đang lọc' : 'Tắt tiết kiệm điện'}
           value={hvac.purifierOn ? 'ON' : 'OFF'}
-          detail="P_air từ DDPG action"
+          detail={hvac.purifierOn ? `${sim?.devices?.purifier?.power_w ?? 42} W` : undefined}
           colorOn="bg-teal-600/20 border-teal-500/35"
           colorOff="bg-slate-900/80 border-slate-800"
         />
-      </div>
-
-      {/* Damper visual bar */}
-      <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3">
-        <div className="flex justify-between text-[8px] font-bold uppercase text-slate-500 mb-2">
-          <span>Mở van gió tươi (D_oa)</span>
-          <span className="text-cyan-400">{hvac.damperPct.toFixed(0)}%</span>
-        </div>
-        <div className="h-3 rounded-full bg-slate-800 overflow-hidden">
-          <motion.div
-            className="h-full rounded-full bg-gradient-to-r from-cyan-600 to-sky-400"
-            animate={{ width: `${Math.min(100, hvac.damperPct)}%` }}
-            transition={{ duration: 0.6 }}
-          />
-        </div>
-        <div className="flex justify-between mt-1.5 text-[7px] text-slate-600 font-mono">
-          <span>0% đóng</span>
-          <span>50%</span>
-          <span>100% mở</span>
-        </div>
-      </div>
-
-      {/* Fan speed visual */}
-      <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-3">
-        <div className="flex justify-between text-[8px] font-bold uppercase text-slate-500 mb-2">
-          <span>Tốc độ quạt cấp (f_sa)</span>
-          <span className={cn(hvac.fanOn ? 'text-blue-400' : 'text-slate-600')}>
-            {hvac.fanOn ? `${(hvac.fSa * 100).toFixed(0)}% — ${hvac.fanMode}` : 'TẮT'}
-          </span>
-        </div>
-        <div className="h-3 rounded-full bg-slate-800 overflow-hidden">
-          <motion.div
-            className={cn('h-full rounded-full', hvac.fanOn ? 'bg-gradient-to-r from-blue-700 to-blue-400' : 'bg-slate-700')}
-            animate={{ width: `${Math.min(100, hvac.fSa * 100)}%` }}
-            transition={{ duration: 0.6 }}
-          />
-        </div>
       </div>
     </div>
   );

@@ -77,6 +77,69 @@ export interface TwinHistoryPoint {
   zone_temp_base: number;
 }
 
+export interface TwinSavingsSummary {
+  energy_saved_kwh: number;
+  savings_vnd: number;
+  power_ai_w: number;
+  power_base_w: number;
+  power_saved_w: number;
+  power_delta_w?: number;
+  instant_savings_pct: number;
+  projected_daily_kwh: number;
+  projected_monthly_kwh: number;
+  projected_daily_ai_kwh?: number;
+  projected_daily_base_kwh?: number;
+  projected_monthly_ai_kwh?: number;
+  projected_monthly_base_kwh?: number;
+  projected_monthly_saved_kwh?: number;
+  projected_daily_vnd: number;
+  projected_monthly_vnd: number;
+  tariff_vnd: number;
+  comfort_ok_ai: boolean;
+  comfort_ok_base: boolean;
+  savings_pct: number;
+}
+
+export interface SeasonMonthBenchmark {
+  month: number;
+  t_mean_c: number;
+  daily_ai_kwh: number;
+  daily_base_kwh: number;
+  monthly_ai_kwh: number;
+  monthly_base_kwh: number;
+  monthly_saved_kwh: number;
+  savings_pct: number;
+}
+
+export interface SeasonBenchmarkResponse {
+  baseline_preset: string;
+  baseline_label: string;
+  baseline_presets: Record<string, string>;
+  months: SeasonMonthBenchmark[];
+  season_6m: {
+    ai_kwh: number;
+    base_kwh: number;
+    saved_kwh: number;
+    savings_pct: number;
+    saved_vnd: number;
+  };
+  annual_estimate: {
+    ai_kwh: number;
+    base_kwh: number;
+    saved_kwh: number;
+    savings_pct: number;
+    saved_vnd: number;
+    method: string;
+  };
+  tariff_vnd: number;
+  benchmark_7d_reference: {
+    source: string;
+    drl_kwh_per_day: number;
+    rbc_kwh_per_day: number;
+    savings_pct: number;
+  };
+}
+
 export interface TwinResponse {
   mode: 'synthetic';
   label: string;
@@ -95,12 +158,15 @@ export interface TwinResponse {
   energy_ai_kwh: number;
   energy_base_kwh: number;
   savings_pct: number;
+  savings_summary?: TwinSavingsSummary;
   history: TwinHistoryPoint[];
   building?: BuildingInfo;
   powerConfig?: PowerConfig;
   paused?: boolean;
   step_interval_s?: number;
   manual_control?: boolean;
+  baseline_preset?: string;
+  baseline_presets?: Record<string, string>;
 }
 
 export interface DRLStateEntry {

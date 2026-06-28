@@ -40,11 +40,94 @@ def _action_to_physical(a_sim: np.ndarray, hour: float) -> dict[str, float]:
     }
 
 
-def _rbc_action(hour: float) -> np.ndarray:
-    """Rule-based baseline from replicate_and_compare.py."""
-    if 6.0 <= hour < 20.0:
-        return np.array([0.2, 0.125, 0.444, 1.0], dtype=np.float32)
-    return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+def _sim_action(t_chws_c: float, d_oa: float, f_sa: float, p_air_on: bool) -> np.ndarray:
+    """Map physical setpoints to normalized sim action [0,1]^4."""
+    return np.array(
+        [
+            np.clip((t_chws_c - 5.0) / 10.0, 0.0, 1.0),
+            np.clip((d_oa - 0.2) / 0.8, 0.0, 1.0),
+            np.clip((f_sa - 0.1) / 0.9, 0.0, 1.0),
+            1.0 if p_air_on else 0.0,
+        ],
+        dtype=np.float32,
+    )
+
+
+def _rbc_bms(
+    hour: float,
+    t_zone: float,
+    t_oa: float,
+    co2_zone: float,
+    *,
+    setpoint: float = 24.0,
+    setback: float = 26.5,
+    occ_start: float = 7.0,
+    occ_end: float = 18.0,
+) -> np.ndarray:
+    """VN office BMS — thermostat theo nhiệt độ phòng, không cố định công suất cả ngày."""
+    occupied = occ_start <= hour < occ_end
+
+    if not occupied:
+        if t_zone <= setback + 1.5:
+            return _sim_action(14.0, 0.08, 0.08, co2_zone > 1000.0)
+        return _sim_action(12.0, 0.10, 0.12, co2_zone > 1000.0)
+
+    if t_oa < t_zone - 1.5 and t_zone <= setback + 1.5:
+        return _sim_action(12.0, min(0.55, 0.30 + (t_zone - t_oa) * 0.04), 0.14, co2_zone > 950.0)
+
+    # Giờ làm việc — chấp nhận 26–27°C như văn phòng VN thực tế, chỉ tăng tải khi >28°C
+    comfort_hi = setpoint + 3.0
+    warm_hi = setpoint + 5.5
+
+    if t_zone <= comfort_hi:
+        return _sim_action(12.0, 0.14, 0.10, co2_zone > 950.0)
+    if t_zone <= comfort_hi + 1.5:
+        return _sim_action(10.0, 0.18, 0.14, co2_zone > 900.0)
+    if t_zone <= warm_hi:
+        return _sim_action(8.0, 0.22, 0.18, co2_zone > 850.0)
+    if t_zone <= warm_hi + 1.5:
+        return _sim_action(7.0, 0.25, 0.22, True)
+    return _sim_action(6.5, 0.28, 0.24, True)
+
+
+def _rbc_action_for_preset(
+    hour: float,
+    preset: str,
+    *,
+    t_zone: float = 24.0,
+    t_oa: float = 30.0,
+    co2_zone: float = 620.0,
+) -> np.ndarray:
+    if preset == "paper":
+        if 6.0 <= hour < 20.0:
+            return np.array([0.2, 0.125, 0.444, 1.0], dtype=np.float32)
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+    if preset == "eco":
+        return _rbc_bms(
+            hour, t_zone, t_oa, co2_zone,
+            setpoint=24.5, setback=27.0, occ_start=7.5, occ_end=17.5,
+        )
+
+    return _rbc_bms(hour, t_zone, t_oa, co2_zone, setpoint=24.0, setback=28.0)
+
+
+def _rbc_action(
+    hour: float,
+    preset: str = "office",
+    *,
+    t_zone: float = 24.0,
+    t_oa: float = 30.0,
+    co2_zone: float = 620.0,
+) -> np.ndarray:
+    return _rbc_action_for_preset(hour, preset, t_zone=t_zone, t_oa=t_oa, co2_zone=co2_zone)
+
+
+RBC_PRESET_LABELS: dict[str, str] = {
+    "office": "BMS văn phòng",
+    "paper": "Bài báo (cũ)",
+    "eco": "BMS tiết kiệm",
+}
 
 
 def _evolve_zone(
@@ -111,6 +194,7 @@ class HanoiTwinEngine:
         self.actor_weights = None
         self.paused = False
         self.manual_override: dict[str, Any] | None = None
+        self.baseline_preset = "office"
         try:
             self.actor_weights = np.load(os.path.join(os.path.dirname(__file__), "actor_weights.npz"))
         except OSError:
@@ -125,7 +209,15 @@ class HanoiTwinEngine:
 
     def _run_drl(self, state: list[float]) -> np.ndarray:
         if self.actor_weights is None:
-            return _sim_to_action(_rbc_action(state[0]))
+            return _sim_to_action(
+                _rbc_action(
+                    state[0],
+                    self.baseline_preset,
+                    t_zone=float(state[6]),
+                    t_oa=float(state[1]),
+                    co2_zone=float(state[8]),
+                )
+            )
         norm = (np.array(state, dtype=np.float32) - STATE_MIN) / (STATE_MAX - STATE_MIN + 1e-8)
         w = self.actor_weights
         h1 = np.maximum(0, np.dot(norm, w["w_z1"]) + w["b_z1"])
@@ -156,6 +248,13 @@ class HanoiTwinEngine:
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
+
+    def set_baseline_preset(self, preset: str) -> None:
+        if preset not in RBC_PRESET_LABELS:
+            raise ValueError(f"Unknown baseline preset: {preset}")
+        self.baseline_preset = preset
+        _invalidate_season_cache()
+        self.reset()
 
     def set_month(self, month: int) -> None:
         if month in WeatherGenerator.T_MEAN:
@@ -240,7 +339,7 @@ class HanoiTwinEngine:
         ai = self.ai_zone
         hour, t_oa, _, _, _ = self._weather_at(self.step - 1)
         snap = building_sim.simulate_step(
-            ai["T"], ai["RH"], ai["CO2"], ai["PM"], t_oa, physical, baseline=False
+            ai["T"], ai["RH"], ai["CO2"], ai["PM"], t_oa, physical, baseline=False, dt_h=DT_H
         )
         self.last_drl_physical = physical
         self.last_ai_snap = {
@@ -269,15 +368,21 @@ class HanoiTwinEngine:
         self.last_drl_action = [float(x) for x in action_raw]
         self.last_drl_physical = ai_physical
 
-        base_a_sim = _rbc_action(hour)
+        base_a_sim = _rbc_action(
+            hour,
+            self.baseline_preset,
+            t_zone=self.base_zone["T"],
+            t_oa=t_oa,
+            co2_zone=self.base_zone["CO2"],
+        )
         base_physical = _action_to_physical(base_a_sim, hour)
 
         ai_snap = building_sim.simulate_step(
-            ai["T"], ai["RH"], ai["CO2"], ai["PM"], t_oa, ai_physical, baseline=False
+            ai["T"], ai["RH"], ai["CO2"], ai["PM"], t_oa, ai_physical, baseline=False, dt_h=DT_H
         )
         base_snap = building_sim.simulate_step(
             self.base_zone["T"], self.base_zone["RH"], self.base_zone["CO2"], self.base_zone["PM"],
-            t_oa, base_physical, baseline=False,
+            t_oa, base_physical, baseline=False, dt_h=DT_H,
         )
 
         self.energy_ai += ai_snap["energy_step_kwh"]
@@ -360,12 +465,72 @@ class HanoiTwinEngine:
             "model": "DDPG Actor (256-256-4)" if self.actor_weights is not None else "RBC fallback",
         }
 
+    def _savings_summary(self) -> dict[str, Any]:
+        cfg = building_sim.get_config()
+        tariff = float(cfg.get("electricity_tariff_vnd", 2500))
+        saved_kwh = max(0.0, self.energy_base - self.energy_ai)
+        savings_pct = 0.0
+        if self.energy_base > 1e-6:
+            savings_pct = max(0.0, saved_kwh / self.energy_base * 100.0)
+
+        power_ai = float((self.last_ai_snap or {}).get("total_power_w", 0))
+        power_base = float((self.last_base_snap or {}).get("total_power_w", 0))
+        power_delta = power_base - power_ai
+        power_saved = max(0.0, power_delta)
+        instant_pct = 0.0
+        if power_base > 1e-6:
+            instant_pct = power_delta / power_base * 100.0
+
+        steps = max(1, self.step)
+        steps_per_day = 96
+        projected_daily_ai = self.energy_ai / steps * steps_per_day
+        projected_daily_base = self.energy_base / steps * steps_per_day
+        projected_daily_saved = max(0.0, projected_daily_base - projected_daily_ai)
+        projected_monthly_ai = projected_daily_ai * 30.0
+        projected_monthly_base = projected_daily_base * 30.0
+        projected_monthly_saved = projected_daily_saved * 30.0
+
+        ai_comfort = (self.last_ai_snap or {}).get("comfort", {})
+        base_comfort = (self.last_base_snap or {}).get("comfort", {})
+
+        return {
+            "energy_saved_kwh": round(saved_kwh, 4),
+            "savings_vnd": round(saved_kwh * tariff),
+            "power_ai_w": round(power_ai, 1),
+            "power_base_w": round(power_base, 1),
+            "power_saved_w": round(power_saved, 1),
+            "power_delta_w": round(power_delta, 1),
+            "instant_savings_pct": round(instant_pct, 1),
+            "projected_daily_kwh": round(projected_daily_saved, 3),
+            "projected_monthly_kwh": round(projected_monthly_saved, 2),
+            "projected_daily_ai_kwh": round(projected_daily_ai, 3),
+            "projected_daily_base_kwh": round(projected_daily_base, 3),
+            "projected_monthly_ai_kwh": round(projected_monthly_ai, 2),
+            "projected_monthly_base_kwh": round(projected_monthly_base, 2),
+            "projected_monthly_saved_kwh": round(projected_monthly_saved, 2),
+            "projected_daily_vnd": round(projected_daily_saved * tariff),
+            "projected_monthly_vnd": round(projected_monthly_saved * tariff),
+            "tariff_vnd": tariff,
+            "comfort_ok_ai": bool(
+                ai_comfort.get("temp_ok")
+                and ai_comfort.get("rh_ok")
+                and ai_comfort.get("co2_ok")
+                and ai_comfort.get("pm_ok")
+            ),
+            "comfort_ok_base": bool(
+                base_comfort.get("temp_ok")
+                and base_comfort.get("rh_ok")
+                and base_comfort.get("co2_ok")
+                and base_comfort.get("pm_ok")
+            ),
+            "savings_pct": round(savings_pct, 1),
+        }
+
     def get_snapshot(self) -> dict[str, Any]:
         self.maybe_advance()
         hour, t_oa, _, q_sol, pm_oa = self._weather_at(self.step)
-        savings_pct = 0.0
-        if self.energy_base > 1e-6:
-            savings_pct = max(0.0, (self.energy_base - self.energy_ai) / self.energy_base * 100.0)
+        savings = self._savings_summary()
+        savings_pct = savings["savings_pct"]
 
         return {
             "mode": "synthetic",
@@ -385,6 +550,7 @@ class HanoiTwinEngine:
             "energy_ai_kwh": round(self.energy_ai, 4),
             "energy_base_kwh": round(self.energy_base, 4),
             "savings_pct": round(savings_pct, 1),
+            "savings_summary": savings,
             "history": self.history[-40:],
             "building": {
                 "building_name": "Tòa nhà văn phòng — Zone A (Mô phỏng)",
@@ -399,7 +565,111 @@ class HanoiTwinEngine:
             "paused": self.paused,
             "step_interval_s": STEP_INTERVAL_S,
             "manual_control": self._active_override() is not None,
+            "baseline_preset": self.baseline_preset,
+            "baseline_presets": RBC_PRESET_LABELS,
         }
+
+
+_SEASON_BENCH_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_SEASON_BENCH_CACHE_TTL = 600.0
+
+
+def _invalidate_season_cache() -> None:
+    global _SEASON_BENCH_CACHE
+    _SEASON_BENCH_CACHE = {}
+
+
+def compute_season_benchmark(preset: str | None = None) -> dict[str, Any]:
+    """Run 1 simulated day (96×15min) per month T5–T10; scale ×30 for monthly totals."""
+    global _SEASON_BENCH_CACHE
+    preset = preset or twin_engine.baseline_preset
+    if preset not in RBC_PRESET_LABELS:
+        preset = "office"
+    now = time.time()
+    cached = _SEASON_BENCH_CACHE.get(preset)
+    if cached and now - cached[0] < _SEASON_BENCH_CACHE_TTL:
+        return cached[1]
+
+    cfg = building_sim.get_config()
+    tariff = float(cfg.get("electricity_tariff_vnd", 2500))
+    months = sorted(WeatherGenerator.T_MEAN.keys())
+    month_rows: list[dict[str, Any]] = []
+    season_ai = 0.0
+    season_base = 0.0
+
+    for month in months:
+        bench = HanoiTwinEngine()
+        bench.baseline_preset = preset
+        bench.month = month
+        bench._load_weather_day()
+        bench.step = 0
+        bench.ai_zone = {"T": 24.0, "RH": 52.0, "CO2": 620.0, "PM": 8.0}
+        bench.base_zone = {"T": 24.0, "RH": 52.0, "CO2": 620.0, "PM": 8.0}
+        bench.energy_ai = 0.0
+        bench.energy_base = 0.0
+        bench.history = []
+        bench.paused = False
+        for _ in range(96):
+            bench._advance()
+
+        daily_ai = bench.energy_ai
+        daily_base = bench.energy_base
+        monthly_ai = daily_ai * 30.0
+        monthly_base = daily_base * 30.0
+        monthly_saved = max(0.0, monthly_base - monthly_ai)
+        pct = (monthly_saved / monthly_base * 100.0) if monthly_base > 1e-9 else 0.0
+        season_ai += monthly_ai
+        season_base += monthly_base
+        month_rows.append({
+            "month": month,
+            "t_mean_c": WeatherGenerator.T_MEAN[month],
+            "daily_ai_kwh": round(daily_ai, 3),
+            "daily_base_kwh": round(daily_base, 3),
+            "monthly_ai_kwh": round(monthly_ai, 1),
+            "monthly_base_kwh": round(monthly_base, 1),
+            "monthly_saved_kwh": round(monthly_saved, 1),
+            "savings_pct": round(pct, 1),
+        })
+
+    season_saved = max(0.0, season_base - season_ai)
+    season_pct = (season_saved / season_base * 100.0) if season_base > 1e-9 else 0.0
+    # Winter (T11–T4) not in weather model — annual ≈ hot season + 35% of hot-season HVAC load
+    winter_factor = 0.35
+    annual_ai = season_ai + season_ai * winter_factor
+    annual_base = season_base + season_base * winter_factor
+    annual_saved = max(0.0, annual_base - annual_ai)
+    annual_pct = (annual_saved / annual_base * 100.0) if annual_base > 1e-9 else 0.0
+
+    result = {
+        "baseline_preset": preset,
+        "baseline_label": RBC_PRESET_LABELS[preset],
+        "baseline_presets": RBC_PRESET_LABELS,
+        "months": month_rows,
+        "season_6m": {
+            "ai_kwh": round(season_ai, 1),
+            "base_kwh": round(season_base, 1),
+            "saved_kwh": round(season_saved, 1),
+            "savings_pct": round(season_pct, 1),
+            "saved_vnd": round(season_saved * tariff),
+        },
+        "annual_estimate": {
+            "ai_kwh": round(annual_ai, 1),
+            "base_kwh": round(annual_base, 1),
+            "saved_kwh": round(annual_saved, 1),
+            "savings_pct": round(annual_pct, 1),
+            "saved_vnd": round(annual_saved * tariff),
+            "method": "6 tháng mùa nóng (T5–T10) + 35% tải mùa đông (T11–T4, ước lượng)",
+        },
+        "tariff_vnd": tariff,
+        "benchmark_7d_reference": {
+            "source": "scripts/replicate_and_compare.py — 7 ngày tháng 7",
+            "drl_kwh_per_day": 17.9,
+            "rbc_kwh_per_day": 31.8,
+            "savings_pct": round((31.8 - 17.9) / 31.8 * 100, 1),
+        },
+    }
+    _SEASON_BENCH_CACHE[preset] = (now, result)
+    return result
 
 
 twin_engine = HanoiTwinEngine()

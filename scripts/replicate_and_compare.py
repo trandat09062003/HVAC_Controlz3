@@ -66,7 +66,13 @@ def run_simulation(policy_type, steps=672, seed=99):
         if policy_type == "DRL":
             a_sim = ddpg2sim(agent.select_action(norm(state), add_noise=False))
         elif policy_type == "RBC":
-            a_sim = np.array([0.2, 0.125, 0.444, 1.0]) if 6.0 <= hour < 20.0 else np.array([1.0, 0.0, 0.0, 0.0])
+            sys.path.insert(0, os.path.join(ROOT, "server", "mqtt-subscriber"))
+            from twin_engine import _rbc_action
+            Tza, CO2 = state[6], state[8]
+            T_oa = state[1]
+            a_sim = _rbc_action(
+                hour, "office", t_zone=float(Tza), t_oa=float(T_oa), co2_zone=float(CO2),
+            )
         else:
             a_sim = (np.random.uniform(-1, 1, 4) + 1.0) / 2.0
 

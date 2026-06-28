@@ -8,9 +8,11 @@ interface ControlPanelProps {
   state: HVACState;
   pendingFields: Partial<Record<keyof HVACState, boolean>>;
   onControlChange: (getNextState: (state: HVACState) => HVACState) => void;
+  /** Tab mô phỏng tòa nhà — ẩn nhãn "AI" trên giao diện */
+  buildingSimulation?: boolean;
 }
 
-export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields, onControlChange }) => {
+export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields, onControlChange, buildingSimulation = false }) => {
   const updateControl = (getNextState: (state: HVACState) => HVACState) => {
     onControlChange(getNextState);
   };
@@ -90,7 +92,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields
             <div className="text-slate-400 mb-1 flex items-center gap-1">
               <Thermometer className="w-3.5 h-3.5" />
               <span className="text-[9px] font-black uppercase tracking-wider">
-                {isAutoMode ? 'AI Target Temp' : 'Manual Set Temp'}
+                {isAutoMode
+                  ? (buildingSimulation ? 'Nhiệt độ mục tiêu' : 'AI Target Temp')
+                  : 'Manual Set Temp'}
               </span>
             </div>
             
@@ -150,7 +154,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields
               </p>
               <span className="text-[8px] text-emerald-400 font-bold mt-1 bg-emerald-500/10 px-1.5 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-0.5">
                 <span className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
-                AI Auto
+                {buildingSimulation ? 'Tự động' : 'AI Auto'}
               </span>
             </div>
             <span className="text-[7px] text-slate-500 font-bold uppercase tracking-tighter leading-none">Bật quạt nếu vượt quá</span>
@@ -169,7 +173,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields
               </p>
               <span className="text-[8px] text-blue-400 font-bold mt-1 bg-blue-500/10 px-1.5 py-0.5 rounded-full border border-blue-500/20 flex items-center gap-0.5">
                 <span className="w-1 h-1 rounded-full bg-blue-500 animate-pulse" />
-                AI Auto
+                {buildingSimulation ? 'Tự động' : 'AI Auto'}
               </span>
             </div>
             <span className="text-[7px] text-slate-500 font-bold uppercase tracking-tighter leading-none">Bật quạt nếu vượt quá</span>
@@ -190,7 +194,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({ state, pendingFields
                   : "text-slate-500 hover:text-slate-400 border border-transparent"
               )}
             >
-              Auto AI
+              {buildingSimulation ? 'Tự động' : 'Auto AI'}
             </button>
             <button
               onClick={() => {

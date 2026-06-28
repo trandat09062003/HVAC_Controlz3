@@ -20,22 +20,38 @@ export const EnergyBreakdownChart: React.FC<EnergyBreakdownChartProps> = ({ sim,
   }
 
   const aiData = Object.entries(sim.devices)
-    .filter(([, d]) => d.enabled && d.power_w > 0)
-    .map(([key, d]) => ({ name: d.name, ai: d.power_w, base: baselineSim?.devices?.[key]?.power_w ?? 0, key }))
-    .sort((a, b) => b.ai - a.ai);
+    .filter(([key, d]) => d.enabled && (d.power_w > 0 || (baselineSim?.devices?.[key]?.power_w ?? 0) > 0))
+    .map(([key, d]) => {
+      const baseW = baselineSim?.devices?.[key]?.power_w ?? 0;
+      const saved = Math.max(0, baseW - d.power_w);
+      return { name: d.name, ai: d.power_w, base: baseW, saved, key };
+    })
+    .sort((a, b) => b.base - a.base);
 
   const totalAi = aiData.reduce((s, d) => s + d.ai, 0);
   const totalBase = aiData.reduce((s, d) => s + d.base, 0);
+  const totalSaved = Math.max(0, totalBase - totalAi);
+  const savingsPct = totalBase > 0 ? (totalSaved / totalBase) * 100 : 0;
 
   return (
     <div className="glass-panel rounded-2xl border border-slate-800/85 p-5 shadow-xl">
-      <div className="flex items-center justify-between mb-4">
-        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-          Phân rã công suất thiết bị
-        </h4>
-        <div className="flex gap-3 text-[9px] font-black font-mono">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+        <div>
+          <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+            Phân rã công suất thiết bị
+          </h4>
+      {baselineSim && totalSaved > 0 && (
+            <p className="text-[9px] text-emerald-400 font-bold mt-1">
+              Giảm {totalSaved.toFixed(0)} W ({savingsPct.toFixed(0)}%)
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-3 text-[9px] font-black font-mono">
           <span className="text-emerald-400">DDPG {totalAi.toFixed(0)} W</span>
-          {baselineSim && <span className="text-slate-500">RBC {totalBase.toFixed(0)} W</span>}
+          {baselineSim && <span className="text-red-400/70">RBC {totalBase.toFixed(0)} W</span>}
+          {baselineSim && totalSaved > 0 && (
+            <span className="text-amber-400">−{totalSaved.toFixed(0)} W</span>
+          )}
         </div>
       </div>
       <div className="h-52">

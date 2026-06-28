@@ -191,6 +191,7 @@ class BuildingSimulator:
         outdoor_temp: float | None,
         drl_physical: dict[str, float] | None,
         baseline: bool = False,
+        dt_h: float | None = None,
     ) -> dict[str, Any]:
         cfg = self.config
         occ = max(1, int(cfg.get("occupancy_count", 1)))
@@ -258,8 +259,8 @@ class BuildingSimulator:
         add_device("occupant", devices["occupant"]["power_w"] * occ)
 
         total_w = sum(d["power_w"] for d in breakdown.values())
-        dt_h = 5.0 / 3600.0
-        energy_kwh = total_w * dt_h / 1000.0
+        step_h = dt_h if dt_h is not None else 5.0 / 3600.0
+        energy_kwh = total_w * step_h / 1000.0
 
         reward = self.compute_reward(energy_kwh, temperature, humidity, co2, dust)
 

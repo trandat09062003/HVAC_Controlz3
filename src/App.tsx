@@ -21,13 +21,13 @@ import mainLogo from '../img/main_logo_2.png';
 import { MetricCard } from './components/MetricCard';
 import { SensorHistoryChart } from './components/SensorHistoryChart';
 import { TwinComparisonChart } from './components/TwinComparisonChart';
-import { TwinTestPanel } from './components/TwinTestPanel';
+import { TwinSavingsPanel } from './components/TwinSavingsPanel';
 import { ControlPanel } from './components/ControlPanel';
 import { BuildingVisualization } from './components/BuildingVisualization';
-import { DevicePowerPanel } from './components/DevicePowerPanel';
 import { DRLModelPanel } from './components/DRLModelPanel';
+import { DRLMonthlySavings } from './components/DRLMonthlySavings';
 import { EnergyBreakdownChart } from './components/EnergyBreakdownChart';
-import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo, DashboardTab, BuildingSimSnapshot, DRLPanel, PowerConfig, BuildingInfo, TwinResponse } from './types';
+import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo, DashboardTab, BuildingSimSnapshot, DRLPanel, BuildingInfo, TwinResponse } from './types';
 import { cn } from './lib/utils';
 
 // Helper to determine status based on thresholds
@@ -151,7 +151,6 @@ export default function App() {
   const [buildingInfo, setBuildingInfo] = useState<BuildingInfo | null>(null);
   const [twin, setTwin] = useState<TwinResponse | null>(null);
   const [twinBusy, setTwinBusy] = useState(false);
-  const [powerConfig, setPowerConfig] = useState<PowerConfig | null>(null);
 
   useEffect(() => {
     hvacStateRef.current = hvacState;
@@ -211,18 +210,6 @@ export default function App() {
       window.clearTimeout(timeout);
     }
   }, [clientId, deviceId]);
-
-  const savePowerConfig = useCallback(async (updates: Partial<PowerConfig>) => {
-    const response = await fetch('/api/power-config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (!response.ok) throw new Error('Failed to save power config');
-    const result = await response.json();
-    setPowerConfig(result.config);
-    showToast('info', 'Đã lưu cấu hình điện năng thiết bị');
-  }, [showToast]);
 
   const sendRemoteControl = useCallback(async (getNextState: (state: HVACState) => HVACState) => {
     const previousState = hvacStateRef.current;
@@ -363,7 +350,6 @@ export default function App() {
         if (!response.ok) throw new Error(`Twin request failed: ${response.status}`);
         const data: TwinResponse = await response.json();
         setTwin(data);
-        if (data.powerConfig) setPowerConfig(data.powerConfig);
       } catch (error) {
         console.error(error);
       }
@@ -385,7 +371,6 @@ export default function App() {
       if (!response.ok) throw new Error('Twin action failed');
       const data = await response.json();
       setTwin(data.twin);
-      if (data.twin?.powerConfig) setPowerConfig(data.twin.powerConfig);
       if (action === 'reset') showToast('info', 'Đã reset mô phỏng');
     } catch {
       showToast('error', 'Thao tác mô phỏng thất bại');
@@ -401,8 +386,8 @@ export default function App() {
 
   const pageTitle = useMemo(() => {
     if (activeTab === 'overview') return 'Giám sát cảm biến Zone A';
-    if (activeTab === 'building') return 'Digital Twin — Mô phỏng';
-    if (activeTab === 'ai') return 'AI / DDPG — Mô phỏng';
+    if (activeTab === 'building') return 'Tòa nhà Hà Nội — Mô phỏng';
+    if (activeTab === 'ai') return 'DDPG — Mô phỏng';
     return 'Điện năng — So sánh DDPG vs RBC';
   }, [activeTab]);
 
@@ -458,7 +443,7 @@ export default function App() {
   const TABS: { id: DashboardTab; label: string; icon: React.ElementType }[] = [
     { id: 'overview', label: 'Tổng quan', icon: Activity },
     { id: 'building', label: 'Tòa nhà', icon: Building2 },
-    { id: 'ai', label: 'AI / DDPG', icon: Brain },
+    { id: 'ai', label: 'DDPG', icon: Brain },
     { id: 'energy', label: 'Điện năng', icon: Zap },
   ];
 
@@ -509,10 +494,9 @@ export default function App() {
 
       {/* --- MAIN CONTENT --- */}
       <main className="pt-24 pb-8 px-4 md:px-8 max-w-[1600px] mx-auto">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className={cn('grid grid-cols-1 gap-6', activeTab === 'overview' && 'lg:grid-cols-12')}>
           
-          {/* Dashboard Left Section: Metrics & Charts */}
-          <div className="lg:col-span-8 space-y-6">
+          <div className={cn('space-y-6', activeTab === 'overview' ? 'lg:col-span-8' : 'col-span-full')}>
             
             {/* Header info */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -527,11 +511,11 @@ export default function App() {
                       )}
                     </>
                   ) : (
-                    <span className="text-violet-400/90">
-                      {twin?.label ?? 'Đang tải mô phỏng...'}
+                    <span className="text-sky-400/90">
+                      Khí hậu Hà Nội mô phỏng • Tháng {twin?.month ?? '—'}
                       {twin?.weather && (
                         <span className="text-slate-500 ml-2">
-                          • Ngoài trời {twin.weather.outdoor_temp}°C • Bước {twin.sim_step}
+                          • {twin.weather.outdoor_temp}°C ngoài trời
                         </span>
                       )}
                     </span>
@@ -598,9 +582,6 @@ export default function App() {
               <p className="text-[11px] text-slate-400 leading-relaxed">
                 {zoneManager?.aiRecommendation || 'Đang chờ dữ liệu cảm biến từ ESP32...'}
               </p>
-              <p className="text-[9px] text-slate-600 mt-3 border-t border-slate-800 pt-3">
-                Tab <strong className="text-slate-500">Tòa nhà / AI / Điện năng</strong> dùng mô phỏng thời tiết Hà Nội (dữ liệu ảo) để test DDPG vs RBC — không trộn với cảm biến thật.
-              </p>
             </div>
               </>
             )}
@@ -608,7 +589,7 @@ export default function App() {
             {/* Tab: Building */}
             {activeTab === 'building' && (
               <div className="space-y-4">
-                <TwinTestPanel twin={twin} onAction={twinAction} busy={twinBusy} />
+                <TwinSavingsPanel twin={twin} compact />
                 <BuildingVisualization
                   building={twinBuilding ?? undefined}
                   sim={twinBuildingSim}
@@ -616,58 +597,42 @@ export default function App() {
                   drlPanel={twinDrlPanel ?? undefined}
                   twin={twin}
                   temperature={twinBuildingSim?.zone_temp}
-                  synthetic
-                  control={displayHvacState}
+                  onTwinAction={twinAction}
+                  twinBusy={twinBusy}
                 />
-                <EnergyBreakdownChart sim={twinBuildingSim} baselineSim={twinBaselineSim} />
               </div>
             )}
 
             {activeTab === 'ai' && (
-              <DRLModelPanel panel={twinDrlPanel ?? undefined} policy={zoneManager?.currentPolicy} />
+              <div className="space-y-4">
+                <DRLMonthlySavings twin={twin} onTwinRefresh={setTwin} />
+                <DRLModelPanel panel={twinDrlPanel ?? undefined} />
+              </div>
             )}
 
             {activeTab === 'energy' && (
-              <div className="space-y-6">
-                <TwinComparisonChart data={twin?.history ?? []} savingsPct={twin?.savings_pct ?? 0} />
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <DevicePowerPanel
-                    config={powerConfig}
-                    totalPowerW={twinBuildingSim?.total_power_w ?? 0}
-                    tariffVnd={powerConfig?.electricity_tariff_vnd ?? 2500}
-                    onSave={savePowerConfig}
-                  />
-                  <EnergyBreakdownChart sim={twinBuildingSim} baselineSim={twinBaselineSim} />
-                </div>
-                {twin && (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {[
-                      { label: 'DDPG tích lũy', value: `${twin.energy_ai_kwh.toFixed(4)} kWh`, color: 'text-emerald-400' },
-                      { label: 'RBC tích lũy', value: `${twin.energy_base_kwh.toFixed(4)} kWh`, color: 'text-slate-400' },
-                      { label: 'Tiết kiệm', value: `${twin.savings_pct.toFixed(1)}%`, color: 'text-emerald-400' },
-                      { label: 'Nhiệt ngoài trời', value: `${twin.weather.outdoor_temp}°C`, color: 'text-sky-400' },
-                    ].map(item => (
-                      <div key={item.label} className="glass-panel rounded-xl p-3 border border-slate-800 text-center">
-                        <p className="text-[8px] text-slate-500 font-bold uppercase">{item.label}</p>
-                        <p className={cn('text-sm font-black font-mono mt-1', item.color)}>{item.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div className="space-y-4">
+                <TwinSavingsPanel twin={twin} />
+                <TwinComparisonChart
+                  data={twin?.history ?? []}
+                  savingsPct={twin?.savings_pct ?? 0}
+                  energySavedKwh={twin?.savings_summary?.energy_saved_kwh ?? Math.max(0, (twin?.energy_base_kwh ?? 0) - (twin?.energy_ai_kwh ?? 0))}
+                />
+                <EnergyBreakdownChart sim={twinBuildingSim} baselineSim={twinBaselineSim} />
               </div>
             )}
           </div>
 
-          {/* Dashboard Right Section: Controls & Status */}
+          {activeTab === 'overview' && (
           <div className="lg:col-span-4 space-y-6">
             
             {isControlStateReady ? (
-              <ControlPanel
-                state={displayHvacState}
-                pendingFields={pendingFields}
-                onControlChange={sendRemoteControl}
-              />
-            ) : (
+                <ControlPanel
+                  state={displayHvacState}
+                  pendingFields={pendingFields}
+                  onControlChange={sendRemoteControl}
+                />
+              ) : (
               <div className="glass-panel rounded-2xl p-6 border border-slate-850 shadow-2xl h-full min-h-[560px] flex flex-col">
                 <div className="flex items-center justify-between mb-6">
                   <div>
@@ -697,7 +662,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Weather */}
             <div className="glass-panel rounded-2xl p-5 border border-slate-800/85 shadow-xl">
                <div className="flex items-center justify-between mb-4">
                   <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Thời tiết Hà Nội</h4>
@@ -778,6 +742,7 @@ export default function App() {
             </div>
 
           </div>
+          )}
         </div>
       </main>
       <AnimatePresence>
