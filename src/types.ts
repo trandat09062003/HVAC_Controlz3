@@ -112,9 +112,6 @@ export interface SeasonMonthBenchmark {
 }
 
 export interface SeasonBenchmarkResponse {
-  baseline_preset: string;
-  baseline_label: string;
-  baseline_presets: Record<string, string>;
   months: SeasonMonthBenchmark[];
   season_6m: {
     ai_kwh: number;
@@ -165,8 +162,6 @@ export interface TwinResponse {
   paused?: boolean;
   step_interval_s?: number;
   manual_control?: boolean;
-  baseline_preset?: string;
-  baseline_presets?: Record<string, string>;
 }
 
 export interface DRLStateEntry {

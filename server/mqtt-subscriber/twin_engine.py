@@ -90,44 +90,14 @@ def _rbc_bms(
     return _sim_action(6.5, 0.28, 0.24, True)
 
 
-def _rbc_action_for_preset(
-    hour: float,
-    preset: str,
-    *,
-    t_zone: float = 24.0,
-    t_oa: float = 30.0,
-    co2_zone: float = 620.0,
-) -> np.ndarray:
-    if preset == "paper":
-        if 6.0 <= hour < 20.0:
-            return np.array([0.2, 0.125, 0.444, 1.0], dtype=np.float32)
-        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-
-    if preset == "eco":
-        return _rbc_bms(
-            hour, t_zone, t_oa, co2_zone,
-            setpoint=24.5, setback=27.0, occ_start=7.5, occ_end=17.5,
-        )
-
-    return _rbc_bms(hour, t_zone, t_oa, co2_zone, setpoint=24.0, setback=28.0)
-
-
 def _rbc_action(
     hour: float,
-    preset: str = "office",
     *,
     t_zone: float = 24.0,
     t_oa: float = 30.0,
     co2_zone: float = 620.0,
 ) -> np.ndarray:
-    return _rbc_action_for_preset(hour, preset, t_zone=t_zone, t_oa=t_oa, co2_zone=co2_zone)
-
-
-RBC_PRESET_LABELS: dict[str, str] = {
-    "office": "BMS văn phòng",
-    "paper": "Bài báo (cũ)",
-    "eco": "BMS tiết kiệm",
-}
+    return _rbc_bms(hour, t_zone, t_oa, co2_zone, setpoint=24.0, setback=28.0)
 
 
 def _evolve_zone(
@@ -194,7 +164,6 @@ class HanoiTwinEngine:
         self.actor_weights = None
         self.paused = False
         self.manual_override: dict[str, Any] | None = None
-        self.baseline_preset = "office"
         try:
             self.actor_weights = np.load(os.path.join(os.path.dirname(__file__), "actor_weights.npz"))
         except OSError:
@@ -212,7 +181,6 @@ class HanoiTwinEngine:
             return _sim_to_action(
                 _rbc_action(
                     state[0],
-                    self.baseline_preset,
                     t_zone=float(state[6]),
                     t_oa=float(state[1]),
                     co2_zone=float(state[8]),
@@ -248,13 +216,6 @@ class HanoiTwinEngine:
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
-
-    def set_baseline_preset(self, preset: str) -> None:
-        if preset not in RBC_PRESET_LABELS:
-            raise ValueError(f"Unknown baseline preset: {preset}")
-        self.baseline_preset = preset
-        _invalidate_season_cache()
-        self.reset()
 
     def set_month(self, month: int) -> None:
         if month in WeatherGenerator.T_MEAN:
@@ -370,7 +331,6 @@ class HanoiTwinEngine:
 
         base_a_sim = _rbc_action(
             hour,
-            self.baseline_preset,
             t_zone=self.base_zone["T"],
             t_oa=t_oa,
             co2_zone=self.base_zone["CO2"],
@@ -565,30 +525,24 @@ class HanoiTwinEngine:
             "paused": self.paused,
             "step_interval_s": STEP_INTERVAL_S,
             "manual_control": self._active_override() is not None,
-            "baseline_preset": self.baseline_preset,
-            "baseline_presets": RBC_PRESET_LABELS,
         }
 
 
-_SEASON_BENCH_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_SEASON_BENCH_CACHE: tuple[float, dict[str, Any]] | None = None
 _SEASON_BENCH_CACHE_TTL = 600.0
 
 
 def _invalidate_season_cache() -> None:
     global _SEASON_BENCH_CACHE
-    _SEASON_BENCH_CACHE = {}
+    _SEASON_BENCH_CACHE = None
 
 
-def compute_season_benchmark(preset: str | None = None) -> dict[str, Any]:
+def compute_season_benchmark() -> dict[str, Any]:
     """Run 1 simulated day (96×15min) per month T5–T10; scale ×30 for monthly totals."""
     global _SEASON_BENCH_CACHE
-    preset = preset or twin_engine.baseline_preset
-    if preset not in RBC_PRESET_LABELS:
-        preset = "office"
     now = time.time()
-    cached = _SEASON_BENCH_CACHE.get(preset)
-    if cached and now - cached[0] < _SEASON_BENCH_CACHE_TTL:
-        return cached[1]
+    if _SEASON_BENCH_CACHE and now - _SEASON_BENCH_CACHE[0] < _SEASON_BENCH_CACHE_TTL:
+        return _SEASON_BENCH_CACHE[1]
 
     cfg = building_sim.get_config()
     tariff = float(cfg.get("electricity_tariff_vnd", 2500))
@@ -599,7 +553,6 @@ def compute_season_benchmark(preset: str | None = None) -> dict[str, Any]:
 
     for month in months:
         bench = HanoiTwinEngine()
-        bench.baseline_preset = preset
         bench.month = month
         bench._load_weather_day()
         bench.step = 0
@@ -641,9 +594,6 @@ def compute_season_benchmark(preset: str | None = None) -> dict[str, Any]:
     annual_pct = (annual_saved / annual_base * 100.0) if annual_base > 1e-9 else 0.0
 
     result = {
-        "baseline_preset": preset,
-        "baseline_label": RBC_PRESET_LABELS[preset],
-        "baseline_presets": RBC_PRESET_LABELS,
         "months": month_rows,
         "season_6m": {
             "ai_kwh": round(season_ai, 1),
@@ -668,7 +618,7 @@ def compute_season_benchmark(preset: str | None = None) -> dict[str, Any]:
             "savings_pct": round((31.8 - 17.9) / 31.8 * 100, 1),
         },
     }
-    _SEASON_BENCH_CACHE[preset] = (now, result)
+    _SEASON_BENCH_CACHE = (now, result)
     return result
 
 

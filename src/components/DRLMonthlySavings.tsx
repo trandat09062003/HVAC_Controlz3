@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { SeasonBenchmarkResponse, TwinResponse } from '../types';
 import { cn } from '../lib/utils';
@@ -10,59 +10,25 @@ function formatVnd(value: number): string {
 
 interface DRLMonthlySavingsProps {
   twin: TwinResponse | null;
-  onTwinRefresh?: (twin: TwinResponse) => void;
 }
 
-export const DRLMonthlySavings: React.FC<DRLMonthlySavingsProps> = ({ twin, onTwinRefresh }) => {
+export const DRLMonthlySavings: React.FC<DRLMonthlySavingsProps> = ({ twin }) => {
   const [season, setSeason] = useState<SeasonBenchmarkResponse | null>(null);
   const [seasonLoading, setSeasonLoading] = useState(true);
-  const [presetBusy, setPresetBusy] = useState(false);
-
-  const activePreset = twin?.baseline_preset ?? season?.baseline_preset ?? 'office';
-  const presetOptions = twin?.baseline_presets ?? season?.baseline_presets ?? {
-    office: 'BMS văn phòng',
-    paper: 'Bài báo (cũ)',
-    eco: 'BMS tiết kiệm',
-  };
-
-  const loadSeason = useCallback(async (preset: string) => {
-    setSeasonLoading(true);
-    try {
-      const response = await fetch(`/api/twin/season-benchmark?preset=${encodeURIComponent(preset)}`);
-      if (!response.ok) throw new Error('benchmark failed');
-      const data: SeasonBenchmarkResponse = await response.json();
-      setSeason(data);
-    } catch {
-      setSeason(null);
-    } finally {
-      setSeasonLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     if (!twin) return;
-    loadSeason(activePreset);
-  }, [twin, activePreset, loadSeason]);
-
-  const handlePresetChange = async (preset: string) => {
-    if (preset === activePreset || presetBusy) return;
-    setPresetBusy(true);
+    let cancelled = false;
     setSeasonLoading(true);
-    try {
-      const response = await fetch('/api/twin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'set_baseline', preset }),
-      });
-      if (!response.ok) throw new Error('set baseline failed');
-      const data = await response.json();
-      if (data.twin) onTwinRefresh?.(data.twin);
-    } catch {
-      setSeasonLoading(false);
-    } finally {
-      setPresetBusy(false);
-    }
-  };
+    fetch('/api/twin/season-benchmark')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: SeasonBenchmarkResponse | null) => {
+        if (!cancelled) setSeason(data);
+      })
+      .catch(() => { if (!cancelled) setSeason(null); })
+      .finally(() => { if (!cancelled) setSeasonLoading(false); });
+    return () => { cancelled = true; };
+  }, [twin]);
 
   if (!twin) {
     return <div className="glass-panel rounded-2xl border border-slate-800 p-6 h-32 animate-pulse" />;
@@ -80,27 +46,6 @@ export const DRLMonthlySavings: React.FC<DRLMonthlySavingsProps> = ({ twin, onTw
             6T: −{season.season_6m.savings_pct.toFixed(0)}% · {season.season_6m.saved_kwh.toFixed(0)} kWh
           </span>
         )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[9px] text-slate-500 uppercase tracking-wider mr-1">Baseline RBC</span>
-        {Object.entries(presetOptions).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            disabled={presetBusy}
-            onClick={() => handlePresetChange(key)}
-            className={cn(
-              'px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wide border transition-colors',
-              activePreset === key
-                ? 'bg-purple-500/20 border-purple-400/50 text-purple-200'
-                : 'bg-slate-900/60 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200',
-              presetBusy && 'opacity-60 cursor-wait',
-            )}
-          >
-            {label}
-          </button>
-        ))}
       </div>
 
       {seasonLoading ? (

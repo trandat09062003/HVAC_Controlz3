@@ -7,7 +7,7 @@ import numpy as np
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 from building_simulator import building_sim
 from twin_engine import twin_engine
@@ -603,9 +603,7 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == '/api/twin/season-benchmark':
             try:
                 from twin_engine import compute_season_benchmark
-                qs = parse_qs(parsed.query)
-                preset = qs.get('preset', [None])[0]
-                body = json.dumps(compute_season_benchmark(preset), cls=NpJsonEncoder).encode('utf-8')
+                body = json.dumps(compute_season_benchmark(), cls=NpJsonEncoder).encode('utf-8')
                 self.send_response(200)
                 self.send_common_headers()
                 self.end_headers()
@@ -688,9 +686,6 @@ class TelemetryRequestHandler(BaseHTTPRequestHandler):
                 elif action == 'set_month':
                     month = int(payload.get('month', twin_engine.month))
                     twin_engine.set_month(month)
-                elif action == 'set_baseline':
-                    preset = str(payload.get('preset', twin_engine.baseline_preset))
-                    twin_engine.set_baseline_preset(preset)
                 else:
                     raise ValueError(f'Unknown twin action: {action}')
 

@@ -71,7 +71,7 @@ def run_simulation(policy_type, steps=672, seed=99):
             Tza, CO2 = state[6], state[8]
             T_oa = state[1]
             a_sim = _rbc_action(
-                hour, "office", t_zone=float(Tza), t_oa=float(T_oa), co2_zone=float(CO2),
+                hour, t_zone=float(Tza), t_oa=float(T_oa), co2_zone=float(CO2),
             )
         else:
             a_sim = (np.random.uniform(-1, 1, 4) + 1.0) / 2.0

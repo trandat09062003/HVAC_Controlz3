@@ -605,7 +605,7 @@ export default function App() {
 
             {activeTab === 'ai' && (
               <div className="space-y-4">
-                <DRLMonthlySavings twin={twin} onTwinRefresh={setTwin} />
+                <DRLMonthlySavings twin={twin} />
                 <DRLModelPanel panel={twinDrlPanel ?? undefined} />
               </div>
             )}
