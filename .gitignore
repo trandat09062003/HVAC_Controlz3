@@ -32,3 +32,6 @@ server/mqtt-subscriber/power_config.json
 
 # Script deploy VPS (chứa thông tin đăng nhập server — không đưa lên git)
 scripts/vps_*.py
+
+# Agent customizations
+.agents/

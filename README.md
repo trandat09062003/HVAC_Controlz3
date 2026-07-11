@@ -1,161 +1,145 @@
-# Smart HVAC AIoT
+# Smart HVAC IoT
 
-Dự án giám sát và điều khiển HVAC cho phòng làm việc: node ESP32-S3 đọc cảm biến thật, server xử lý MQTT + DDPG, dashboard React xem telemetry và chạy digital twin mô phỏng thời tiết Hà Nội.
+Hệ thống giám sát, điều khiển tối ưu hóa thông khí và nhiệt độ điều hòa (HVAC) cho phòng làm việc sử dụng giải pháp IoT tích hợp. Hệ thống bao gồm thiết bị phần cứng (ESP32-S3), máy chủ trung tâm thu nhận dữ liệu (Python MQTT Subscriber + TimescaleDB) và giao diện giám sát trực quan (React + Vite) kết hợp mô hình giả lập Digital Twin thời tiết Hà Nội.
 
-Tham chiếu thuật toán: Guo et al., *Applied Energy*, 2025 — [DOI:10.1016/j.apenergy.2024.124467](https://doi.org/10.1016/j.apenergy.2024.124467)
-
-Repo: [github.com/trandat09062003/Smart_HVAC_AIOT](https://github.com/trandat09062003/Smart_HVAC_AIOT)
+Dự án tối ưu hóa hiệu quả sử dụng năng lượng và chất lượng không khí thông qua **Thuật toán điều khiển theo Luật Ngưỡng (Rule-Based Control - RBC) tối ưu**, giúp tiết kiệm điện năng đáng kể so với hệ thống BMS truyền thống.
 
 ---
 
-## Hệ thống gồm những gì
+## Kiến trúc hệ thống
 
 ```
-ESP32 (SCD30, PMS7003, LCD)
-        │  MQTT sensor/indoor
+ESP32 (Cảm biến & Màn hình)
+        │  MQTT (sensor/indoor & remote-control/#)
         ▼
-Mosquitto + mqtt-subscriber (Python)
-        │  TimescaleDB, DDPG inference, REST API
-        ▼
-Dashboard React (Vite)
+Mosquitto Broker ──► mqtt-subscriber (Python) ──► TimescaleDB (Lưu trữ)
+                           │
+                           ├── Bộ điều khiển Luật Ngưỡng (Zone Manager)
+                           └── REST API Server
+                                     │
+                                     ▼
+                              React Dashboard
 ```
 
-- **Tab Tổng quan** — dữ liệu cảm biến thật từ ESP32, biểu đồ lịch sử.
-- **Tab Tòa nhà / AI / Điện năng** — digital twin (dữ liệu mô phỏng), so sánh DDPG với rule-based baseline.
-- Panel điều khiển bên phải gửi lệnh xuống ESP32 và đồng bộ sang twin khi chỉnh thủ công.
-
-Nếu không có file `actor_weights.npz`, server chạy rule-based (giờ làm việc, đêm ECO, standby).
+1. **Edge Node (ESP32-S3)**: Đọc các cảm biến môi trường (SCD30 cho CO2, Temp, Humidity và PMS7003 cho PM2.5), hiển thị lên màn hình LCD I2C và gửi dữ liệu lên MQTT Broker định kỳ mỗi 2 giây. Đồng thời, thiết bị lắng nghe tín hiệu điều khiển từ server để cập nhật trạng thái hiển thị (Setpoint, Damper, Fan).
+2. **MQTT Broker (Mosquitto)**: Làm cầu nối trung gian truyền thông điệp thời gian thực giữa phần cứng và máy chủ.
+3. **Backend Server (mqtt-subscriber)**: Thu nhận dữ liệu cảm biến thực tế từ MQTT, ghi nhật ký vào TimescaleDB, chạy bộ điều khiển tối ưu hóa vùng đệm hành vi (Zone Manager) và cung cấp REST API cho frontend.
+4. **React Dashboard**: Giao diện người dùng thời gian thực hiển thị dữ liệu cảm biến thực tế, bảng điều khiển thiết bị giả lập, tích hợp **Digital Twin mô phỏng thời tiết Hà Nội** để so sánh trực quan lượng điện năng tiêu thụ của Luật Tối Ưu (Optimized RBC) so với BMS Mặc Định (Baseline).
 
 ---
 
-## Phần cứng
+## Thuật toán điều khiển tối ưu (Zone Manager)
 
-| Thiết bị | Bus | GPIO |
-|----------|-----|------|
-| ESP32-S3-N16R8 | — | — |
-| SCD30 | I²C (Wire1) | SDA=8, SCL=9 |
-| LCD 1602 I²C | I²C (Wire) | SDA=10, SCL=11 |
-| PMS5003 | UART | RX=16, TX=17 |
-| WS2812 (LED onboard) | — | 48 |
+Thay vì chạy điều hòa ở một chế độ cố định gây lãng phí điện năng, bộ điều khiển Zone Manager tự động điều chỉnh các thông số Setpoint nhiệt độ, van gió tươi (Damper) và tốc độ quạt dựa trên các luật ngưỡng tối ưu hóa:
 
-Sơ đồ PCB: [`docs/hardware_design_guide.md`](docs/hardware_design_guide.md)
-
----
-
-## Cấu trúc thư mục
-
-```
-esp32/HVAC_Sensor_Node/     Firmware Arduino + thư viện local (src/)
-server/mqtt-subscriber/     MQTT, DB, API, DDPG, twin_engine
-paper_reference/            Train DDPG, simulator, checkpoint
-src/                        Frontend React
-scripts/                    replicate_and_compare.py
-docs/                       Tài liệu bổ sung
-docker-compose.yml          Local :3000, MQTT :1883
-docker-compose.alt.yml      VPS / chạy song song :3005, :1885
-```
-
-Chi tiết từng file: [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md)
+1. **Chính sách lịch làm việc (Scheduled Policies)**:
+   - **Giờ làm việc (Working Hours)**: Duy trì nhiệt độ mát lý tưởng ở mức 24.5°C, mở van gió tươi 50% để đảm bảo lượng oxy trong phòng, bật thông gió phụ nếu CO2 vượt ngưỡng 700 ppm.
+   - **Ngủ đêm ECO (Night ECO)**: Tăng nhiệt độ lên 26.5°C, giảm tốc độ quạt xuống mức thấp nhất để hạn chế tiếng ồn, giảm mở van gió xuống 30%.
+   - **Chế độ chờ (Eco Standby - Ngoài giờ)**: Khi phòng trống không có người, hệ thống tự động tắt điều hòa để đưa thiết bị về trạng thái chờ tiết kiệm năng lượng tối đa, van gió tươi chỉ giữ ở mức 20%.
+2. **Chế độ làm mát tự nhiên (Free Cooling)**:
+   - Hệ thống liên tục so sánh nhiệt độ trong phòng với nhiệt độ ngoài trời (outdoor temperature).
+   - Nếu nhiệt độ ngoài trời mát hơn nhiệt độ phòng 1.5°C (ví dụ ban đêm hoặc lúc trời mưa), hệ thống sẽ **tắt block lạnh điều hòa**, tự động **mở van gió tươi 100%** và **chạy quạt thông gió ở mức cao nhất** (High) để hút khí mát tự nhiên từ ngoài vào phòng, giúp làm mát phòng mà không tốn điện chạy máy nén.
 
 ---
 
-## Model DDPG (tóm tắt)
+## Giao diện Dashboard (React + Vite)
 
-**State (10):** giờ, T ngoài trời, độ ẩm tuyệt đối ngoài/phòng, nhiệt mặt trời, CO₂, PM, ...
+Giao diện giám sát được chia làm 3 Tab chức năng chính:
+- **Tổng quan**: Theo dõi dữ liệu cảm biến thực tế thời gian thực (Nhiệt độ, Độ ẩm, CO2, PM2.5) từ ESP32 gửi lên, biểu đồ lịch sử, trạng thái điều khiển tự động của Zone Manager và Panel điều khiển chỉnh tay.
+- **Tòa nhà (Digital Twin)**: Trực quan hóa mô hình 3D mặt cắt tòa nhà. Chạy mô phỏng thời gian thực theo chu kỳ thời tiết Hà Nội theo các tháng mùa hè nóng ẩm (Tháng 5 - Tháng 10), hiển thị sự chênh lệch luồng khí và nhiệt độ của Zone điều khiển tối ưu vs Zone mặc định.
+- **Điện năng**: Biểu đồ so sánh điện năng tiêu thụ tích lũy (kWh), công suất tức thời (W) và số tiền điện tiết kiệm được của **Luật Tối Ưu** so với **BMS Mặc Định**.
 
-**Action (4):** nhiệt độ nước lạnh, van gió tươi, tốc độ quạt, máy lọc ON/OFF.
+---
 
-Actor: `256 → 256 → 4 (tanh)`. Reward phạt điện năng + vi phạm tiện nghi (nhiệt, ẩm, CO₂, PM khi có người).
+## Cấu trúc thư mục dự án
 
-Train local:
+```
+esp32/HVAC_Sensor_Node/     # Mã nguồn firmware Arduino cho ESP32-S3
+server/mqtt-subscriber/     # Backend Python: subscriber nhận tin, lưu DB, API server & twin engine
+src/                        # Frontend React + TypeScript styled with CSS
+docs/                       # Hướng dẫn thiết kế mạch PCB phần cứng
+docker-compose.yml          # Stack Docker chạy môi trường Local (:3000)
+docker-compose.alt.yml      # Stack Docker chạy môi trường Server VPS (:3005)
+```
 
+---
+
+## Hướng dẫn cài đặt và vận hành
+
+### Yêu cầu hệ thống
+- Docker và Docker Compose (được khuyên dùng để triển khai nhanh)
+- Node.js (phiên bản 20 trở lên nếu phát triển frontend local)
+- Arduino IDE (nếu cần chỉnh sửa và nạp code cho ESP32)
+
+### 1. Vận hành nhanh bằng Docker Compose
+
+#### Triển khai môi trường Local (Dashboard cổng 3000, MQTT cổng 1883):
 ```bash
-cd paper_reference
-python train.py
-```
-
-Colab: mở `paper_reference/train.ipynb`.
-
-Export weights cho server:
-
-```bash
-set CHECKPOINT_DIR=paper_reference/checkpoints
-python server/mqtt-subscriber/load_model.py
-```
-
-Benchmark 7 ngày (tháng 7): DRL ~17.9 kWh/ngày, RBC ~31.8, Random ~38.7 — chạy lại bằng `python scripts/replicate_and_compare.py`.
-
----
-
-## Chạy nhanh
-
-### Server (Docker)
-
-```bash
-git clone https://github.com/trandat09062003/Smart_HVAC_AIOT.git
-cd Smart_HVAC_AIOT
 docker compose up -d --build
 ```
+Truy cập giao diện tại: http://localhost:3000
 
-Dashboard: http://localhost:3000 — MQTT: port 1883.
-
-Chạy song song project khác (tránh trùng cổng):
-
+#### Triển khai môi trường Server/VPS (Dashboard cổng 3005, MQTT cổng 1885):
 ```bash
-docker compose -p smart_hvac -f docker-compose.alt.yml up -d --build
-# :3005 và :1885
+docker compose -f docker-compose.alt.yml up -d --build
 ```
+Truy cập giao diện tại: http://localhost:3005 hoặc địa chỉ IP VPS của bạn ở cổng 3005.
 
-### Firmware ESP32
+### 2. Cấu hình & Nạp code cho ESP32-S3
 
-Sửa đầu file `esp32/HVAC_Sensor_Node/HVAC_Sensor_Node.ino`:
+Mở tệp `esp32/HVAC_Sensor_Node/HVAC_Sensor_Node.ino` trong Arduino IDE và điều chỉnh thông tin WiFi cũng như địa chỉ IP Server:
 
 ```cpp
-#define WIFI_SSID        "TenMangWiFi"
-#define WIFI_PASSWORD    "MatKhauWiFi"
-#define MQTT_SERVER      "192.168.1.100"
-#define MQTT_PORT        1883    // hoặc 1885 nếu dùng docker-compose.alt.yml
-#define MQTT_DEVICE_ID   "indoor-01"
+#define WIFI_SSID        "Tên_WiFi_Của_Bạn"
+#define WIFI_PASSWORD    "Mật_Khẩu_WiFi_Của_Bạn"
+#define MQTT_SERVER      "IP_Của_Máy_Chủ"     // Địa chỉ IP máy tính chạy Docker hoặc VPS
+#define MQTT_PORT        1883                 // Hoặc 1885 nếu dùng docker-compose.alt.yml
 ```
 
-Nạp bằng Arduino IDE, board ESP32-S3. Thư viện đã có trong `esp32/HVAC_Sensor_Node/src/`.
-
-### Frontend dev
-
-```bash
-npm install
-npm run dev
-# http://localhost:5173
-```
+Các thư viện ngoại vi cần thiết đã được đính kèm sẵn trong thư mục `esp32/HVAC_Sensor_Node/src/`.
 
 ---
 
-## MQTT
+## Thiết kế phần cứng
 
-| Topic | Hướng | Nội dung chính |
-|-------|-------|----------------|
-| `sensor/indoor` | ESP → server | temp, humidity, co2, dust, device_id |
-| `remote-control/indoor-01` | server → ESP | power, temp, operation_mode, fan_power, co2_max, humidity_max |
+| Thiết bị | Giao tiếp | Chân GPIO | Vai trò |
+|----------|-----|------|---------|
+| **ESP32-S3-N16R8** | — | — | Bộ vi xử lý chính |
+| **Sensirion SCD30** | I²C (Wire1) | SDA=8, SCL=9 | Cảm biến đo CO2, Nhiệt độ và Độ ẩm |
+| **Plantower PMS7003** | UART (Serial2) | RX=16, TX=17 | Cảm biến đo bụi mịn PM2.5 |
+| **LCD 1602 I²C** | I²C (Wire) | SDA=10, SCL=11 | Màn hình hiển thị thông tin cục bộ |
+| **WS2812 RGB** | Single-wire | 48 | LED hiển thị trạng thái chất lượng không khí |
 
----
-
-## Gặp lỗi thường gặp
-
-- **Không load được DRL** — chạy `load_model.py`, rebuild container `mqtt-subscriber`.
-- **Dashboard không có data** — kiểm tra IP/port MQTT, ESP32 có vào WiFi không.
-- **Chỉ thấy rule, không DRL** — xem log subscriber, kiểm tra file `actor_weights.npz`.
-- **Train chậm** — dùng Colab notebook trong `paper_reference/`.
-
-DB mặc định trong docker: `iotdb` / `admin` / `admin123` — đổi mật khẩu trước khi đưa lên môi trường thật.
+Sơ đồ chân chi tiết và hướng dẫn làm mạch PCB có tại: `docs/hardware_design_guide.md`.
 
 ---
 
-## Tài liệu thêm
+## Chi tiết các Topic MQTT
 
-- [`paper_reference/README.md`](paper_reference/README.md) — huấn luyện và simulator
-- [`docs/hardware_design_guide.md`](docs/hardware_design_guide.md) — PCB
-- [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) — map file trong repo
+- **`sensor/indoor`** (ESP32-S3 ➡️ Server): Định dạng JSON gửi dữ liệu cảm biến thực tế.
+  ```json
+  {
+    "device_id": "indoor-01",
+    "temperature": 25.4,
+    "humidity": 55.2,
+    "co2": 620,
+    "dust": 12.0
+  }
+  ```
+- **`remote-control/indoor-01`** (Server ➡️ ESP32-S3): JSON truyền lệnh điều khiển tự động hoặc thủ công của hệ thống.
+  ```json
+  {
+    "device_id": "indoor-01",
+    "power": true,
+    "temp": 24.5,
+    "operationMode": "auto",
+    "fanPower": "auto",
+    "co2Max": 700.0,
+    "humidityMax": 60.0
+  }
+  ```
 
-## License
+---
 
-MIT
+## Tác giả và Bản quyền
+Dự án được phát triển và vận hành bởi đội ngũ kỹ sư hệ thống nhúng và IoT. Mã nguồn được phát hành dưới giấy phép MIT.

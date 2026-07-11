@@ -47,8 +47,8 @@ export const EnergyBreakdownChart: React.FC<EnergyBreakdownChartProps> = ({ sim,
           )}
         </div>
         <div className="flex flex-wrap gap-3 text-[9px] font-black font-mono">
-          <span className="text-emerald-400">DDPG {totalAi.toFixed(0)} W</span>
-          {baselineSim && <span className="text-red-400/70">RBC {totalBase.toFixed(0)} W</span>}
+          <span className="text-emerald-400">Tối Ưu {totalAi.toFixed(0)} W</span>
+          {baselineSim && <span className="text-red-400/70">Mặc Định {totalBase.toFixed(0)} W</span>}
           {baselineSim && totalSaved > 0 && (
             <span className="text-amber-400">−{totalSaved.toFixed(0)} W</span>
           )}
@@ -66,13 +66,13 @@ export const EnergyBreakdownChart: React.FC<EnergyBreakdownChartProps> = ({ sim,
             {baselineSim && (
               <Legend wrapperStyle={{ fontSize: '9px', color: '#94a3b8' }} />
             )}
-            <Bar dataKey="ai" name="DDPG" radius={[0, 4, 4, 0]} barSize={baselineSim ? 8 : 14}>
+            <Bar dataKey="ai" name="Tối Ưu" radius={[0, 4, 4, 0]} barSize={baselineSim ? 8 : 14}>
               {aiData.map((_, i) => (
                 <Cell key={`ai-${i}`} fill={COLORS_AI[i % COLORS_AI.length]} fillOpacity={0.9} />
               ))}
             </Bar>
             {baselineSim && (
-              <Bar dataKey="base" name="RBC" radius={[0, 4, 4, 0]} barSize={8}>
+              <Bar dataKey="base" name="Mặc Định" radius={[0, 4, 4, 0]} barSize={8}>
                 {aiData.map((_, i) => (
                   <Cell key={`base-${i}`} fill={COLORS_BASE[i % COLORS_BASE.length]} fillOpacity={0.7} />
                 ))}

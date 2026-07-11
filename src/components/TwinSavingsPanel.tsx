@@ -35,7 +35,7 @@ export const TwinSavingsPanel: React.FC<TwinSavingsPanelProps> = ({ twin, compac
 
   const powerLabel = powerDelta >= 0
     ? `−${powerDelta.toFixed(0)} W`
-    : `+${Math.abs(powerDelta).toFixed(0)} W (DDPG cao hơn)`;
+    : `+${Math.abs(powerDelta).toFixed(0)} W (Tối ưu cao hơn)`;
   const powerColor = powerDelta >= 0 ? 'text-violet-400' : 'text-amber-400';
 
   const metrics = compact
@@ -47,7 +47,7 @@ export const TwinSavingsPanel: React.FC<TwinSavingsPanelProps> = ({ twin, compac
       ]
     : [
         { icon: TrendingDown, label: 'Đã tiết kiệm', value: `${(s?.energy_saved_kwh ?? 0).toFixed(3)} kWh`, color: 'text-emerald-400' },
-        { icon: Zap, label: 'DDPG / RBC', value: `${energyAi.toFixed(3)} / ${energyBase.toFixed(3)} kWh`, color: 'text-slate-300' },
+        { icon: Zap, label: 'Tối Ưu / Mặc Định', value: `${energyAi.toFixed(3)} / ${energyBase.toFixed(3)} kWh`, color: 'text-slate-300' },
         { icon: Leaf, label: 'Chi phí giảm', value: formatVnd(s?.savings_vnd ?? 0), color: 'text-amber-400' },
         { icon: Zap, label: 'Công suất hiện tại', value: powerLabel, color: powerColor },
         { icon: Leaf, label: 'Dự báo/ngày', value: `${(s?.projected_daily_kwh ?? 0).toFixed(2)} kWh`, color: 'text-cyan-400' },
@@ -74,13 +74,13 @@ export const TwinSavingsPanel: React.FC<TwinSavingsPanelProps> = ({ twin, compac
             </div>
           </div>
           <div>
-            <p className="text-[9px] font-black uppercase text-emerald-400 tracking-widest">Tiết kiệm tích lũy vs RBC</p>
+            <p className="text-[9px] font-black uppercase text-emerald-400 tracking-widest">Tiết kiệm tích lũy vs Mặc Định</p>
             <p className="text-[10px] text-slate-500 mt-0.5">
               Bước {twin.sim_step} • {simTime} • Tháng {twin.month} • Ngoài trời {twin.weather.outdoor_temp}°C
             </p>
             {s && (
               <p className="text-[9px] text-slate-600 mt-1">
-                Thoải mái: DDPG {s.comfort_ok_ai ? '✓' : '✗'} · RBC {s.comfort_ok_base ? '✓' : '✗'}
+                Thoải mái: Tối Ưu {s.comfort_ok_ai ? '✓' : '✗'} · Mặc Định {s.comfort_ok_base ? '✓' : '✗'}
                 {' · '}Giá điện {s.tariff_vnd.toLocaleString('vi-VN')} ₫/kWh
               </p>
             )}
@@ -111,14 +111,14 @@ export const TwinSavingsPanel: React.FC<TwinSavingsPanelProps> = ({ twin, compac
           )}
         </p>
         <div className="flex items-center gap-2 text-[8px] font-bold uppercase text-slate-500">
-          <span className="w-10 text-emerald-400">DDPG</span>
+          <span className="w-10 text-emerald-400">Tối Ưu</span>
           <div className="flex-1 h-2 rounded-full bg-slate-900 overflow-hidden">
             <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${(powerAi / maxPower) * 100}%` }} />
           </div>
           <span className="w-12 text-right font-mono text-emerald-400">{powerAi.toFixed(0)}W</span>
         </div>
         <div className="flex items-center gap-2 text-[8px] font-bold uppercase text-slate-500">
-          <span className="w-10 text-red-400/80">RBC</span>
+          <span className="w-10 text-red-400/80">Mặc Định</span>
           <div className="flex-1 h-2 rounded-full bg-slate-900 overflow-hidden">
             <div className="h-full bg-red-500/60 rounded-full" style={{ width: `${(powerBase / maxPower) * 100}%` }} />
           </div>

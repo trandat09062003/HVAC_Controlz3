@@ -251,4 +251,4 @@ export interface RemoteControlResponse {
   command: RemoteControlState;
 }
 
-export type DashboardTab = 'overview' | 'building' | 'ai' | 'energy';
+export type DashboardTab = 'overview' | 'building' | 'energy';

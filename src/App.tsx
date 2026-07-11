@@ -24,10 +24,8 @@ import { TwinComparisonChart } from './components/TwinComparisonChart';
 import { TwinSavingsPanel } from './components/TwinSavingsPanel';
 import { ControlPanel } from './components/ControlPanel';
 import { BuildingVisualization } from './components/BuildingVisualization';
-import { DRLModelPanel } from './components/DRLModelPanel';
-import { DRLMonthlySavings } from './components/DRLMonthlySavings';
 import { EnergyBreakdownChart } from './components/EnergyBreakdownChart';
-import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo, DashboardTab, BuildingSimSnapshot, DRLPanel, BuildingInfo, TwinResponse } from './types';
+import { SensorReading, ChartDataPoint, HVACState, Status, TelemetryResponse, RemoteControlPayload, RemoteControlResponse, RemoteControlState, ZoneManagerInfo, DashboardTab, BuildingSimSnapshot, BuildingInfo, TwinResponse } from './types';
 import { cn } from './lib/utils';
 
 // Helper to determine status based on thresholds
@@ -381,14 +379,13 @@ export default function App() {
 
   const twinBuildingSim = twin?.buildingSim ?? null;
   const twinBaselineSim = twin?.baselineSim ?? null;
-  const twinDrlPanel = twin?.drlPanel ?? null;
+  const twinDrlPanel = null;
   const twinBuilding = twin?.building ?? buildingInfo;
 
   const pageTitle = useMemo(() => {
     if (activeTab === 'overview') return 'Giám sát cảm biến Zone A';
     if (activeTab === 'building') return 'Tòa nhà Hà Nội — Mô phỏng';
-    if (activeTab === 'ai') return 'DDPG — Mô phỏng';
-    return 'Điện năng — So sánh DDPG vs RBC';
+    return 'Điện năng — So sánh Luật Tối Ưu vs Mặc Định';
   }, [activeTab]);
 
   // --- WEATHER ---
@@ -443,7 +440,6 @@ export default function App() {
   const TABS: { id: DashboardTab; label: string; icon: React.ElementType }[] = [
     { id: 'overview', label: 'Tổng quan', icon: Activity },
     { id: 'building', label: 'Tòa nhà', icon: Building2 },
-    { id: 'ai', label: 'DDPG', icon: Brain },
     { id: 'energy', label: 'Điện năng', icon: Zap },
   ];
 
@@ -455,7 +451,7 @@ export default function App() {
           <img src={mainLogo} alt="HVAC Sentinel Logo" className="h-9 object-contain" />
           <div className="hidden sm:flex flex-col">
             <span className="text-xs font-black uppercase tracking-widest bg-gradient-to-r from-emerald-400 via-teal-300 to-blue-500 bg-clip-text text-transparent">HVAC Sentinel</span>
-            <span className="text-[8px] font-bold text-slate-500 uppercase tracking-tight">AI-IoT Optimization Platform</span>
+            <span className="text-[8px] font-bold text-slate-500 uppercase tracking-tight">Smart HVAC Optimization Platform</span>
           </div>
         </div>
 
@@ -563,7 +559,7 @@ export default function App() {
             <SensorHistoryChart data={history} />
 
             <div className="glass-panel rounded-2xl p-5 border border-slate-800/85 shadow-xl">
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Trạng thái điều khiển AI</h4>
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Trạng thái điều khiển Tự động</h4>
               <div className="flex flex-wrap gap-3 items-center mb-3">
                 <span className="text-[8px] font-black uppercase text-slate-300 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-full">
                   {zoneManager?.currentPolicy === 'working_hours' && '💼 Giờ làm việc'}
@@ -600,13 +596,6 @@ export default function App() {
                   onTwinAction={twinAction}
                   twinBusy={twinBusy}
                 />
-              </div>
-            )}
-
-            {activeTab === 'ai' && (
-              <div className="space-y-4">
-                <DRLMonthlySavings twin={twin} />
-                <DRLModelPanel panel={twinDrlPanel ?? undefined} />
               </div>
             )}
 

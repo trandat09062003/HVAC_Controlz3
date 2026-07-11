@@ -155,22 +155,16 @@ def calculate_simulated_power(payload, latest_control, drl_physical=None):
         'baseline_snapshot': base_snap,
     }
 
-# ====================== AI ZONE MANAGER ======================
+# ====================== ZONE MANAGER (RULE-BASED) ======================
 class ZoneManager:
     def __init__(self):
         self.client = None
         self.current_policy = "working_hours"  # "working_hours", "night_eco", "eco_standby", "manual"
         self.override_until = 0  # Timestamp khi manual override kích hoạt
         self.last_applied_state = {}
-        self.last_recommendation = "Hệ thống hoạt động tối ưu."
-        
-        # Load DRL weights
-        try:
-            self.actor_weights = np.load(os.path.join(os.path.dirname(__file__), "actor_weights.npz"))
-            print("🤖 AI Zone Manager: Loaded DRL actor weights successfully!")
-        except Exception as e:
-            self.actor_weights = None
-            print(f"⚠️ AI Zone Manager: Failed to load DRL weights ({e}). Using rule fallback.")
+        self.last_recommendation = "Hệ thống hoạt động tối ưu bằng Luật Ngưỡng."
+        self.actor_weights = None
+        print("💡 Zone Manager: Đã tắt hoàn toàn AI. Sử dụng Luật Ngưỡng (RBC) tối ưu.")
 
     def get_scheduled_policy(self):
         import datetime
@@ -194,31 +188,9 @@ class ZoneManager:
     def set_client(self, client):
         self.client = client
 
-    def _run_drl_inference(self, state):
-        if self.actor_weights is None:
-            return None
-        
-        # State normalization — khớp paper_reference/config.py
-        state_min = np.array([0, 18, 0.006, 0, 390, 0, 15, 0.003, 400, 0], dtype=np.float32)
-        state_max = np.array([24, 42, 0.026, 900, 520, 80, 35, 0.022, 2000, 50], dtype=np.float32)
-        norm_state = (np.array(state) - state_min) / (state_max - state_min + 1e-8)
-        
-        # NumPy forward pass
-        w_z1 = self.actor_weights['w_z1']
-        b_z1 = self.actor_weights['b_z1']
-        w_z2 = self.actor_weights['w_z2']
-        b_z2 = self.actor_weights['b_z2']
-        w_action = self.actor_weights['w_action']
-        b_action = self.actor_weights['b_action']
-        
-        h1 = np.maximum(0, np.dot(norm_state, w_z1) + b_z1) # ReLU
-        h2 = np.maximum(0, np.dot(h1, w_z2) + b_z2) # ReLU
-        action = np.tanh(np.dot(h2, w_action) + b_action) # Tanh
-        return action
-
     def evaluate_and_control(self, device_id, temperature, co2, humidity, outdoor_temp, dust=10.0):
         """
-        Thuật toán điều khiển phối hợp dựa trên DRL DDPG (Applied Energy 2025) và Chính sách Zone.
+        Thuật toán điều khiển phối hợp dựa trên Luật Ngưỡng (Rule-Based Control) tối ưu và Chính sách Zone.
         """
         import time
         
@@ -235,108 +207,48 @@ class ZoneManager:
         op_mode = "auto"
         fan_power = "auto"
         
-        # Ngưỡng CO2 và Độ ẩm tối ưu tự động bởi AI
         co2_max = 800.0
         humidity_max = 60.0
         D_oa = 0.3 # Default damper opening
         reason = "Đang áp dụng chính sách thời gian mặc định."
  
-        # Logic DRL (Applied Energy 2025):
-        if self.actor_weights is not None and policy != "eco_standby":
-            try:
-                import math
-                def rh_to_omega(rh_pct: float, T_c: float) -> float:
-                    p_sat = 0.6112 * math.exp(17.67 * T_c / (T_c + 243.5))  # kPa
-                    p_v   = (rh_pct / 100.0) * p_sat
-                    return float(np.clip(0.622 * p_v / (101.325 - p_v), 0.001, 0.030))
-
-                def solar_estimate(hour: float) -> float:
-                    if 6.0 <= hour <= 18.0:
-                        return max(0.0, 600.0 * math.sin(math.pi * (hour - 6.0) / 12.0))
-                    return 0.0
-
-                T_oa = outdoor_temp if outdoor_temp is not None else temperature + 3.0
-                omega_za = rh_to_omega(humidity, temperature)
-                omega_oa = rh_to_omega(max(humidity - 5, 20), T_oa)
-                
-                import datetime
-                now_dt = datetime.datetime.now()
-                hour = now_dt.hour + now_dt.minute / 60.0
-                q_sol = solar_estimate(hour)
-                
-                pm_out = dust if dust is not None else 10.0
-                pm_in = max(0.0, pm_out * 0.75)
-                
-                state_list = building_sim.build_state_vector(
-                    temperature, humidity, co2, dust if dust is not None else 10.0, outdoor_temp
-                )
-                state = np.array(state_list, dtype=np.float32)
-                
-                action = self._run_drl_inference(state)
-                hour = state_list[0]
-                physical = building_sim.map_action_physical(action, hour)
-                
-                # Map actions
-                a = (np.clip(action, -1.0, 1.0) + 1.0) / 2.0  # -> [0, 1]
-                
-                T_chws = physical["T_chws"]
-                target_temp = physical["target_temp"]
-                f_sa = physical["f_sa"]
-                D_oa = physical["D_oa"]
-                fan_on = (f_sa > 0.20) or (D_oa > 0.30)
-                
-                op_mode = "cool" if T_chws < 10.0 else "auto"
-                fan_power = "on" if fan_on else "off"
-                
-                if fan_on:
-                    co2_max = 650.0
-                    humidity_max = 55.0
-                else:
-                    co2_max = 1000.0
-                    humidity_max = 70.0
-                
-                reason = f"DRL DDPG (Applied Energy 2025) tối ưu: Temp={target_temp}°C (T_chws={T_chws:.1f}°C), Fan={fan_power} (f_sa={f_sa*100:.0f}%, D_oa={D_oa*100:.0f}%), CO2_Max={co2_max} ppm."
-            except Exception as ex:
-                print(f"❌ DRL inference error: {ex}. Falling back to Rule-Based Control.")
-                self.actor_weights = None  # Force rule fallback
-                
-        # Rule Fallback (if DRL weights not loaded or inference failed)
+        # Rule-Based Control (RBC) tối ưu theo các ngưỡng cụ thể:
         occ = max(1, int(building_sim.config.get("occupancy_count", 1)))
-        if self.actor_weights is None or (policy == "eco_standby" and occ < 1):
-            if outdoor_temp is not None and outdoor_temp < temperature - 1.5 and policy != "eco_standby":
-                target_temp = 28.0  
-                op_mode = "fan"     
-                fan_power = "high"  
-                co2_max = 600.0      
-                humidity_max = 55.0  
-                D_oa = 1.0
-                reason = f"Rule-Based (Free Cooling): Trời mát ({outdoor_temp:.1f}°C) hơn trong phòng ({temperature:.1f}°C). MỞ CỬA SỔ và chạy quạt thông gió!"
-            else:
-                if policy == "working_hours":
-                    target_temp = 24.5  
-                    op_mode = "auto"
-                    fan_power = "auto"
-                    co2_max = 700.0      
-                    humidity_max = 60.0  
-                    D_oa = 0.5
-                    reason = "Rule-Based (Giờ làm việc): Duy trì độ mát tối ưu."
-                elif policy == "night_eco":
-                    target_temp = 26.5  
-                    op_mode = "auto"
-                    fan_power = "low"   
-                    co2_max = 950.0      
-                    humidity_max = 65.0  
-                    D_oa = 0.3
-                    reason = "Rule-Based (Ngủ đêm ECO): Tăng nhẹ nhiệt độ và giảm ồn quạt."
-                elif policy == "eco_standby":
-                    power = False
-                    target_temp = 28.0
-                    op_mode = "off"
-                    fan_power = "off"
-                    co2_max = 1200.0     
-                    humidity_max = 75.0
-                    D_oa = 0.2
-                    reason = "Rule-Based (Ngoài giờ): Đưa Zone về chế độ chờ Standby tiết kiệm điện."
+        
+        if outdoor_temp is not None and outdoor_temp < temperature - 1.5 and policy != "eco_standby":
+            target_temp = 28.0  
+            op_mode = "fan"     
+            fan_power = "high"  
+            co2_max = 600.0      
+            humidity_max = 55.0  
+            D_oa = 1.0
+            reason = f"Luật Ngưỡng (Free Cooling): Trời mát ({outdoor_temp:.1f}°C) hơn trong phòng ({temperature:.1f}°C). MỞ CỬA SỔ và chạy quạt thông gió!"
+        else:
+            if policy == "working_hours":
+                target_temp = 24.5  
+                op_mode = "auto"
+                fan_power = "auto"
+                co2_max = 700.0      
+                humidity_max = 60.0  
+                D_oa = 0.5
+                reason = "Luật Ngưỡng (Giờ làm việc): Duy trì độ mát và thông gió tối ưu."
+            elif policy == "night_eco":
+                target_temp = 26.5  
+                op_mode = "auto"
+                fan_power = "low"   
+                co2_max = 950.0      
+                humidity_max = 65.0  
+                D_oa = 0.3
+                reason = "Luật Ngưỡng (Ngủ đêm ECO): Tăng nhẹ nhiệt độ và giảm ồn quạt."
+            elif policy == "eco_standby":
+                power = False
+                target_temp = 28.0
+                op_mode = "off"
+                fan_power = "off"
+                co2_max = 1200.0     
+                humidity_max = 75.0
+                D_oa = 0.2
+                reason = "Luật Ngưỡng (Ngoài giờ): Đưa Zone về chế độ chờ Standby tiết kiệm điện."
  
         self.last_recommendation = reason
  
@@ -370,7 +282,7 @@ class ZoneManager:
                 try:
                     self.client.publish(f"{CONTROL_TOPIC}/{device_id}", json.dumps(command), qos=1)
                     save_remote_control_state(command)
-                    print(f"🤖 AI Zone Manager [{policy}]: Đã đẩy Setpoint & Ngưỡng tối ưu xuống ESP32 → Temp: {target_temp}°C | CO2: {co2_max} ppm | lý do: {reason}")
+                    print(f"💡 Zone Manager (Rule-Based) [{policy}]: Đã đẩy Setpoint & Ngưỡng tối ưu xuống ESP32 → Temp: {target_temp}°C | CO2: {co2_max} ppm | lý do: {reason}")
                 except Exception as e:
                     print(f"❌ Zone Manager publish error: {e}")
 

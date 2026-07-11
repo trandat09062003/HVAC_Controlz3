@@ -164,10 +164,6 @@ class HanoiTwinEngine:
         self.actor_weights = None
         self.paused = False
         self.manual_override: dict[str, Any] | None = None
-        try:
-            self.actor_weights = np.load(os.path.join(os.path.dirname(__file__), "actor_weights.npz"))
-        except OSError:
-            pass
 
     def _load_weather_day(self) -> None:
         t, om, qs, pm = self.weather.generate_day(self.month)
@@ -176,21 +172,31 @@ class HanoiTwinEngine:
         self.q_sol = qs
         self.pm_oa = pm
 
-    def _run_drl(self, state: list[float]) -> np.ndarray:
-        if self.actor_weights is None:
-            return _sim_to_action(
-                _rbc_action(
-                    state[0],
-                    t_zone=float(state[6]),
-                    t_oa=float(state[1]),
-                    co2_zone=float(state[8]),
-                )
-            )
-        norm = (np.array(state, dtype=np.float32) - STATE_MIN) / (STATE_MAX - STATE_MIN + 1e-8)
-        w = self.actor_weights
-        h1 = np.maximum(0, np.dot(norm, w["w_z1"]) + w["b_z1"])
-        h2 = np.maximum(0, np.dot(h1, w["w_z2"]) + w["b_z2"])
-        return np.tanh(np.dot(h2, w["w_action"]) + w["b_action"])
+    def _opt_rbc_action(
+        self,
+        hour: float,
+        t_zone: float,
+        t_oa: float,
+        co2_zone: float,
+    ) -> np.ndarray:
+        """Optimized Rule-Based Control (RBC) replacing DRL in twin simulation."""
+        # 1. Determine policy
+        if 8.0 <= hour < 22.0:
+            policy = "working_hours"
+        else:
+            policy = "night_eco"
+
+        # Free cooling check
+        if t_oa < t_zone - 1.5:
+            # target_temp = 28.0, op_mode = fan, fan = high (f_sa = 0.8), damper = 1.0, fresh air fan on
+            return _sim_action(15.0, 1.0, 0.8, True)
+
+        if policy == "working_hours":
+            # target_temp = 24.5, op_mode = auto, fan = auto (f_sa = 0.5), damper = 0.5, fresh air if co2 > 700
+            return _sim_action(10.0, 0.5, 0.5, co2_zone > 700.0)
+        else:
+            # target_temp = 26.5, op_mode = auto, fan = low (f_sa = 0.22), damper = 0.3, fresh air if co2 > 950
+            return _sim_action(14.0, 0.3, 0.22, co2_zone > 950.0)
 
     def _weather_at(self, idx: int) -> tuple[float, float, float, float, float]:
         i = idx % 96
@@ -323,9 +329,9 @@ class HanoiTwinEngine:
         ]
         self.last_drl_state = state
 
-        action_raw = self._run_drl(state)
-        a_sim = (np.clip(action_raw, -1.0, 1.0) + 1.0) / 2.0
+        a_sim = self._opt_rbc_action(hour, ai["T"], t_oa, ai["CO2"])
         ai_physical = self._apply_override(_action_to_physical(a_sim, hour))
+        action_raw = a_sim * 2.0 - 1.0
         self.last_drl_action = [float(x) for x in action_raw]
         self.last_drl_physical = ai_physical
 
@@ -422,7 +428,7 @@ class HanoiTwinEngine:
             ],
             "physical": physical,
             "reward": self.last_reward,
-            "model": "DDPG Actor (256-256-4)" if self.actor_weights is not None else "RBC fallback",
+            "model": "Luật Ngưỡng Tối Ưu (RBC Optimized)",
         }
 
     def _savings_summary(self) -> dict[str, Any]:

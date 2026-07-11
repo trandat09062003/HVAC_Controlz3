@@ -25,7 +25,7 @@ export const TwinComparisonChart: React.FC<TwinComparisonChartProps> = ({
   <div className="glass-panel rounded-2xl p-5 border border-slate-800 shadow-xl min-h-[280px]">
     <div className="flex flex-wrap justify-between items-start gap-2 mb-4">
       <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">
-        Điện năng tích lũy — DDPG vs RBC
+        Điện năng tích lũy — Tối Ưu vs Mặc Định
       </h3>
       <div className="flex gap-2">
         {savingsPct > 0 && (
@@ -61,8 +61,8 @@ export const TwinComparisonChart: React.FC<TwinComparisonChartProps> = ({
             formatter={(v: number, name: string) => [`${v.toFixed(4)} kWh`, name]}
           />
           <Legend wrapperStyle={{ fontSize: '9px', fontWeight: 700, color: '#94a3b8' }} />
-          <Area type="monotone" dataKey="energy_base" name="RBC" stroke="#ef4444" strokeWidth={2} fill="url(#twinBase)" isAnimationActive={false} />
-          <Area type="monotone" dataKey="energy_ai" name="DDPG" stroke="#10b981" strokeWidth={2.5} fill="url(#twinAi)" isAnimationActive={false} />
+          <Area type="monotone" dataKey="energy_base" name="Mặc Định" stroke="#ef4444" strokeWidth={2} fill="url(#twinBase)" isAnimationActive={false} />
+          <Area type="monotone" dataKey="energy_ai" name="Tối Ưu" stroke="#10b981" strokeWidth={2.5} fill="url(#twinAi)" isAnimationActive={false} />
         </AreaChart>
       </ResponsiveContainer>
     </div>

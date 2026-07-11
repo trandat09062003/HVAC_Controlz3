@@ -231,10 +231,10 @@ export const BuildingVisualization: React.FC<BuildingVisualizationProps> = ({
 
         {baselineSim?.zone_temp != null && (
           <div className="absolute bottom-3 right-3 px-3 py-2 rounded-lg bg-slate-950/90 border border-slate-800 text-[9px]">
-            <span className="text-slate-500">RBC: </span>
+            <span className="text-slate-500">Mặc Định: </span>
             <span className="font-mono font-bold text-slate-300">{baselineSim.zone_temp.toFixed(1)}°C</span>
             <span className="text-slate-600 mx-1">|</span>
-            <span className="text-slate-500">DDPG: </span>
+            <span className="text-slate-500">Tối Ưu: </span>
             <span className="font-mono font-bold text-emerald-400">{zoneTemp?.toFixed(1)}°C</span>
           </div>
         )}
