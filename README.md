@@ -1,4 +1,4 @@
-# Smart HVAC IoT
+# Smart HVAC
 
 Hệ thống giám sát, điều khiển tối ưu hóa thông khí và nhiệt độ điều hòa (HVAC) cho phòng làm việc sử dụng giải pháp IoT tích hợp. Hệ thống bao gồm thiết bị phần cứng (ESP32-S3), máy chủ trung tâm thu nhận dữ liệu (Python MQTT Subscriber + TimescaleDB) và giao diện giám sát trực quan (React + Vite) kết hợp mô hình giả lập Digital Twin thời tiết Hà Nội.
 
